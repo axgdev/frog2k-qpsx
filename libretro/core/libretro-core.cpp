@@ -40,6 +40,7 @@
 #include "port.h"
 #include "profiler.h"
 #include "cdriso.h"  /* v258: CDDA conversion functions */
+#include "plugin_lib/plugin_lib.h"  /* QPSX_280: For pl_init() */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -275,7 +276,7 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
     }
 }
 
-#define QPSX_VERSION "270"
+#define QPSX_VERSION "282"
 #define QPSX_GLOBAL_CONFIG_PATH "/mnt/sda1/cores/config/pcsx4all.cfg"
 #define QPSX_NATIVE_CONFIG_PATH "/mnt/sda1/cores/config/psx_native.cfg"
 
@@ -450,6 +451,10 @@ extern "C" int native_cmd_check_enabled(u32 psx_opcode)
         case 0x2A: lookup_code = 0x2A; break; /* SWL */
         case 0x2B: lookup_code = 0x2B; break; /* SW */
         case 0x2E: lookup_code = 0x2E; break; /* SWR */
+        /* v272: COP2/GTE instructions have trap handlers - allow them! */
+        case 0x12: return 1; /* COP2 - emit_cop2_trap handles this */
+        case 0x32: return 1; /* LWC2 - emit_lwc2 handles this */
+        case 0x3A: return 1; /* SWC2 - emit_swc2 handles this */
     }
 
     /* Search for this opcode in menu and check enabled status */
@@ -627,6 +632,7 @@ static struct {
     /* v115: Native Mode - run compatible MIPS I instructions directly
      * v236: 3=NATIVE (run native, fallback dynarec), 4=DIFF (compare native vs dynarec) */
     int native_mode;        /* 0=OFF, 1=STATS, 2=FAST, 3=NATIVE, 4=DIFF_TEST */
+    int native_remap_set;   /* v271: 0=SAFE(s5-s7), 1=OLD(gp-crash) */
 
     /* Display */
     int show_fps;
@@ -688,6 +694,7 @@ static struct {
 
     /* v241: Native Mode - OFF by default (full speed) */
     0,                  /* v241: native_mode=OFF (0=OFF, 1=STATS, 2=FAST, 3=NATIVE, 4=DIFF) */
+    0,                  /* v271: native_remap_set=SAFE */
 
     /* Display */
     0,                  /* show_fps = 0 (off by default) */
@@ -740,6 +747,7 @@ int g_opt_block_cache = 0;       /* Hot Block Cache level (default OFF) */
 /* Inspired by Sony POPS (PSP PS1 emulator) semi-native execution model */
 /* 0=OFF, 1=STATS (show native ratio), 2=FAST (skip const prop), 3=SEMI (semi-native) */
 int g_opt_native_mode = 0;       /* v241: Native Mode OFF (full speed default) */
+int g_opt_native_remap_set = 0;  /* v271: SAFE s5-s7 */
 
 /* v114/v115: Native mode stats from recompiler */
 extern "C" int native_mode_get_ratio(void);
@@ -753,7 +761,7 @@ typedef struct {
     int restart;        /* 1=needs restart, 0=instant apply */
 } MenuItem;
 
-#define MENU_ITEMS 57
+#define MENU_ITEMS 58
 enum {
     MI_SEP_HEADER = 0,
     MI_FRAMESKIP,
@@ -803,6 +811,7 @@ enum {
     MI_CYCLE_BATCH,     /* v112: Cycle batching (RISK!) */
     MI_BLOCK_CACHE,     /* v112: Block result cache */
     MI_NATIVE_MODE,     /* v114: Native MIPS execution mode */
+    MI_NATIVE_REMAP,    /* v271: Native remap set */
     MI_SEP_CONFIG,
     MI_SAVE_GAME,
     MI_SAVE_SLUS,
@@ -875,6 +884,7 @@ static const MenuItem menu_items[MENU_ITEMS] = {
     {"!CycleBatch!",        0, 0},  /* v112: Cycle batching (RISK! instant apply) */
     {"BlockCache",          0, 0},  /* v112: Block result cache (instant) */
     {"NativeMode",          0, 0},  /* v114: Native MIPS execution (instant) */
+    {" NatRemap",          0, 0},  /* v271: Native remap */
     {"--- CONFIG ---",      1, 0},
     {"SAVE GAME CFG",       2, 0},
     {"SAVE SLUS CFG",       2, 0},
@@ -1069,8 +1079,10 @@ static void draw_native_cmd_menu(uint16_t *buffer) {
         buffer[i] = NCMD_COLOR_BG;
     }
 
-    /* Title */
-    DrawText(buffer, 50, 4, NCMD_COLOR_TITLE, "NATIVE COMMAND CONFIG v250");
+    /* Title - use QPSX_VERSION */
+    char title_buf[48];
+    snprintf(title_buf, sizeof(title_buf), "NATIVE COMMAND CONFIG v%s", QPSX_VERSION);
+    DrawText(buffer, 50, 4, NCMD_COLOR_TITLE, title_buf);
     DrawSeparator(buffer, 10, 14, SCREEN_WIDTH - 20, NCMD_COLOR_TITLE);
 
     /* Draw visible items */
@@ -1427,6 +1439,7 @@ static int write_config_file(const char *path)
     fprintf(f, "cdda_asm_mix = %d\n", qpsx_config.cdda_asm_mix);
     fprintf(f, "cdda_binsav = %d\n", qpsx_config.cdda_binsav);  /* v257: Save compressed CDDA option */
     fprintf(f, "native_mode = %d\n", qpsx_config.native_mode);  /* v116: Save native mode */
+    fprintf(f, "native_remap_set = %d\n", qpsx_config.native_remap_set);
 
     fclose(f);
     return 1;
@@ -1498,6 +1511,7 @@ static int load_config_file(const char *path)
             else if (strcmp(k, "cdda_asm_mix") == 0) qpsx_config.cdda_asm_mix = value;
             else if (strcmp(k, "cdda_binsav") == 0) qpsx_config.cdda_binsav = value;  /* v257 */
             else if (strcmp(k, "native_mode") == 0) qpsx_config.native_mode = value;  /* v116: Load native mode */
+            else if (strcmp(k, "native_remap_set") == 0) qpsx_config.native_remap_set = value;
         }
     }
     fclose(f);
@@ -1606,6 +1620,7 @@ static void qpsx_apply_config(void)
 
     /* v114: Native Mode (instant apply) */
     g_opt_native_mode = qpsx_config.native_mode;
+    g_opt_native_remap_set = qpsx_config.native_remap_set;
 
     /* v110/v111: CDDA speedup options (instant apply) */
     g_opt_cdda_fast_mix = qpsx_config.cdda_fast_mix;
@@ -2447,6 +2462,10 @@ static void draw_menu_overlay(uint16_t *pixels)
                     snprintf(buf, sizeof(buf), "%s%-12s: %s", sel, mi->name, mode);
                 }
                 break;
+            case MI_NATIVE_REMAP:
+                snprintf(buf, sizeof(buf), "%s%-12s: %s", sel, mi->name,
+                    qpsx_config.native_remap_set == 0 ? "SAFE(s5-7)" : "OLD(crash)");
+                break;
             case MI_SAVE_GAME:
             case MI_SAVE_SLUS:
             case MI_SAVE_GLOBAL:
@@ -2588,6 +2607,7 @@ static void handle_menu_input(void)
                 case MI_CYCLE_BATCH: if (qpsx_config.cycle_batch > 0) qpsx_config.cycle_batch--; else qpsx_config.cycle_batch = 3; break;
                 case MI_BLOCK_CACHE: if (qpsx_config.block_cache > 0) qpsx_config.block_cache--; else qpsx_config.block_cache = 7; break;
                 case MI_NATIVE_MODE: if (qpsx_config.native_mode > 0) qpsx_config.native_mode--; else qpsx_config.native_mode = 4; break;  /* v236: 0-4 */
+                case MI_NATIVE_REMAP: qpsx_config.native_remap_set = !qpsx_config.native_remap_set; break;  /* v271: toggle SAFE/OLD */
             }
             qpsx_apply_config();
             repeat_delay = 8;
@@ -2643,6 +2663,7 @@ static void handle_menu_input(void)
                 case MI_CYCLE_BATCH: qpsx_config.cycle_batch = (qpsx_config.cycle_batch + 1) % 4; break;
                 case MI_BLOCK_CACHE: qpsx_config.block_cache = (qpsx_config.block_cache + 1) % 8; break;
                 case MI_NATIVE_MODE: qpsx_config.native_mode = (qpsx_config.native_mode + 1) % 5; break;  /* v236: 0-4 */
+                case MI_NATIVE_REMAP: qpsx_config.native_remap_set = !qpsx_config.native_remap_set; break;  /* v271: toggle SAFE/OLD */
             }
             qpsx_apply_config();
             repeat_delay = 8;
@@ -3060,6 +3081,16 @@ bool retro_load_game(const struct retro_game_info *info)
         XLOG("ERROR: CheckCdrom() failed!");
         return false;
     }
+
+    /* QPSX_277: FIX - Reinitialize timing after region detection! */
+    psxRcntReinitTiming();
+
+    /* QPSX_280: FIX - Initialize plugin_lib AFTER region detection!
+     * Without this, pl_data.frame_interval stays 0, causing infinite loop
+     * in pl_frame_limit() for NTSC games. PAL games "worked" because
+     * the config mismatch triggered pl_frameskip_prepare(). */
+    pl_init();
+
 
     if (Config.HLE) {
         if (LoadCdrom() == -1) {

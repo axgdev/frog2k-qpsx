@@ -1,11 +1,9 @@
 /*
  * PCSX4ALL libretro port implementation
- * QPSX_075 - EXTENDED REGISTER ALLOCATOR + FILE LOGGING
+ * QPSX_282 - Cleaned up diagnostic logging
  *
  * CRITICAL: This file does NOT call any SF2000 input functions!
  * All input is read from the cache set by update_input_cache() in libretro-core.cpp.
- *
- * v075: Debug logs disabled by default, use menu option to enable file logging.
  */
 
 #include "port.h"
