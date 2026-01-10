@@ -6,6 +6,8 @@ Based on PCSX4ALL with MIPS-to-MIPS dynamic recompiler, ported to the SF2000/GB3
 
 **Current Status: Early Alpha** - Many games are playable but performance varies significantly.
 
+**Current CDDA Compression Status: Broken. Keep your orignal .bin audio files. Fix coming soon.**
+
 ## Downloads
 
 | Platform | File |
