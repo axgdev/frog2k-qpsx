@@ -84,6 +84,7 @@ static int RVB[NSSIZE * 2];
 int ChanBuf[NSSIZE];
 
 #define CDDA_BUFFER_SIZE (4096 * sizeof(uint32_t)) // must be power of 2
+#define CDDA_BUFFER_SAMPLES (CDDA_BUFFER_SIZE / sizeof(uint32_t))  // v394: fix buffer overflow
 
 ////////////////////////////////////////////////////////////////////////
 // CODE AREA
@@ -1350,7 +1351,7 @@ static void SetupStreams(void)
 
  spu.CDDAStart =                                       // alloc cdda buffer
   (uint32_t *)malloc(CDDA_BUFFER_SIZE);
- spu.CDDAEnd   = spu.CDDAStart + 16384;
+ spu.CDDAEnd   = spu.CDDAStart + CDDA_BUFFER_SAMPLES;  // v394: was 16384 (buffer overflow!)
  spu.CDDAPlay  = spu.CDDAStart;
  spu.CDDAFeed  = spu.CDDAStart;
 

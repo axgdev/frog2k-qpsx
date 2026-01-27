@@ -682,11 +682,15 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
     audio_batch_cb(buf, samples);
 }
 
-#define QPSX_VERSION "393"
+#define QPSX_VERSION "395"
 #define QPSX_GLOBAL_CONFIG_PATH "/mnt/sda1/cores/config/pcsx4all.cfg"
 #define QPSX_NATIVE_CONFIG_PATH "/mnt/sda1/cores/config/psx_native.cfg"
 #define QPSX_ASM_CONFIG_PATH "/mnt/sda1/cores/config/psx_asm.cfg"
 #define QPSX_CRASH_MARKER_PATH "/mnt/sda1/cores/config/psx_crash.tmp"
+#define QPSX_STARTUP_CONFIG_PATH "/mnt/sda1/cores/config/psx_startup.cfg"
+
+/* v395: Global startup option - whether to open menu at startup */
+static int g_menu_at_start = 1;  /* default: show menu at start */
 
 /* ============== v353: BITFLAGS FOR BOOLEAN OPTIONS ============== */
 /* Pack ON/OFF options into bytes instead of ints: 8 options = 1 byte vs 32 bytes
@@ -1270,7 +1274,8 @@ typedef struct {
 } MenuItem;
 
 /* v367: Menu with GPU/SMC/Dynarec HARDCODED like v066 */
-#define MENU_ITEMS 39
+/* v395: Added MI_MENU_AT_START, fixed count (was 39, should be 38) */
+#define MENU_ITEMS 38
 enum {
     MI_SEP_HEADER = 0,
     MI_SWAP_CD,         /* Swap CD for multi-disc */
@@ -1309,6 +1314,7 @@ enum {
     MI_DEL_SLUS,
     MI_DEL_GLOBAL,
     MI_SEP_EXIT,
+    MI_MENU_AT_START,  /* v395: Menu at start option */
     MI_EXIT
 };
 
@@ -1317,7 +1323,7 @@ enum {
  * GPU options (except Pixel Size), SMC Check, Dynarec options = HARDCODED
  */
 static const MenuItem menu_items[MENU_ITEMS] = {
-    {"--- QPSX v376 ---",   1, 0},
+    {"--- QPSX v395 ---",   1, 0},
     {">> SWAP CD <<",       2, 0},
     {"Frameskip",           0, 0},
     {"Target Speed",        0, 1},
@@ -1354,6 +1360,7 @@ static const MenuItem menu_items[MENU_ITEMS] = {
     {"DEL SLUS CFG",        2, 0},
     {"DEL GLOBAL CFG",      2, 0},
     {"--------------",      1, 0},
+    {"Menu at Start",       0, 0},  /* v395: Auto-open menu on startup */
     {"EXIT MENU",           2, 0}
 };
 
@@ -2375,6 +2382,29 @@ static int config_exists(const char *path)
     return (size > 10);
 }
 
+/* v395: Startup config - saved in separate file, auto-saves on change */
+static void save_startup_config(void)
+{
+    FILE *f = fopen(QPSX_STARTUP_CONFIG_PATH, "w");
+    if (!f) return;
+    fprintf(f, "menu_at_start=%d\n", g_menu_at_start);
+    fclose(f);
+}
+
+static void load_startup_config(void)
+{
+    FILE *f = fopen(QPSX_STARTUP_CONFIG_PATH, "r");
+    if (!f) return;
+    char line[64];
+    while (fgets(line, sizeof(line), f)) {
+        int val;
+        if (sscanf(line, "menu_at_start=%d", &val) == 1) {
+            g_menu_at_start = val ? 1 : 0;
+        }
+    }
+    fclose(f);
+}
+
 static void set_feedback(const char *msg)
 {
     strncpy(feedback_msg, msg, sizeof(feedback_msg) - 1);
@@ -3115,6 +3145,9 @@ static void draw_menu_overlay(uint16_t *pixels)
                 col = (menu_item == item) ? MENU_SEL : RGB565(255, 128, 0);
                 marker = "";
                 break;
+            case MI_MENU_AT_START:
+                snprintf(buf, sizeof(buf), "%s%-12s: %s", sel, mi->name, g_menu_at_start ? "ON" : "OFF");
+                break;
             case MI_SAVE_GAME:
             case MI_SAVE_SLUS:
             case MI_SAVE_GLOBAL:
@@ -3264,6 +3297,7 @@ static void handle_menu_input(void)
                 case MI_REMAP_DOWN: qpsx_config.remap_down = (qpsx_config.remap_down + 13) % 14; break;
                 case MI_REMAP_LEFT: qpsx_config.remap_left = (qpsx_config.remap_left + 13) % 14; break;
                 case MI_REMAP_RIGHT: qpsx_config.remap_right = (qpsx_config.remap_right + 13) % 14; break;
+                case MI_MENU_AT_START: g_menu_at_start = !g_menu_at_start; save_startup_config(); break;
             }
             qpsx_apply_config();
             repeat_delay = 8;
@@ -3309,6 +3343,7 @@ static void handle_menu_input(void)
                 case MI_REMAP_DOWN: qpsx_config.remap_down = (qpsx_config.remap_down + 1) % 14; break;
                 case MI_REMAP_LEFT: qpsx_config.remap_left = (qpsx_config.remap_left + 1) % 14; break;
                 case MI_REMAP_RIGHT: qpsx_config.remap_right = (qpsx_config.remap_right + 1) % 14; break;
+                case MI_MENU_AT_START: g_menu_at_start = !g_menu_at_start; save_startup_config(); break;
             }
             qpsx_apply_config();
             repeat_delay = 8;
@@ -3577,10 +3612,14 @@ void retro_run(void)
         }
         native_cmd_update_any_enabled();
 
-        /* v377: Auto-open main menu at startup (unconditional) */
-        XLOG("v377: Opening main config menu at startup");
-        menu_active = 1;
-        menu_first_frame = 1;
+        /* v395: Auto-open main menu at startup (based on g_menu_at_start setting) */
+        if (g_menu_at_start) {
+            XLOG("v395: Opening main config menu at startup (menu_at_start=ON)");
+            menu_active = 1;
+            menu_first_frame = 1;
+        } else {
+            XLOG("v395: Skipping menu at startup (menu_at_start=OFF)");
+        }
 
         /* v377: Safe mode, native_cmd_menu, asm_cmd_menu REMOVED (dead code) */
 
@@ -3756,6 +3795,9 @@ void retro_run(void)
 bool retro_load_game(const struct retro_game_info *info)
 {
     XLOG("=== retro_load_game() ===");
+
+    /* v395: Load startup config first (before game config) */
+    load_startup_config();
 
     if (!info || !info->path) {
         XLOG("ERROR: No game info!");
