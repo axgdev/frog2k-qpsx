@@ -602,7 +602,10 @@ int FlushMcd(enum MemcardNum mcd_num, bool sync_file)
 	int retval = 0;
 	if (sync_file) {
 		if (fflush(mc.file)) retval = -1;
+#ifndef SF2000
+		/* v397: Skip fsync on SF2000 bare metal - can hang indefinitely */
 		if (fsync(fileno(mc.file))) retval = -1;
+#endif
 	}
 	if (fclose(mc.file)) retval = -1;
 	mc.file = NULL;

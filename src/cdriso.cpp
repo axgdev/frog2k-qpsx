@@ -1865,6 +1865,11 @@ long CDR_open(void) {
 long CDR_close(void) {
 	int i;
 
+	/* v397: Stop CDDA FIRST before closing file handles!
+	 * Otherwise CDDA thread may try to read from closed files */
+	stopCDDA();
+	cddaHandle = NULL;
+
 	if (cdHandle != NULL) {
 		fclose(cdHandle);
 		cdHandle = NULL;
@@ -1873,8 +1878,6 @@ long CDR_close(void) {
 		fclose(subHandle);
 		subHandle = NULL;
 	}
-	stopCDDA();
-	cddaHandle = NULL;
 
 #ifndef NO_ZLIB
 	if (compr_img != NULL) {

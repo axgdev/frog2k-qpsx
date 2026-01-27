@@ -682,7 +682,7 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
     audio_batch_cb(buf, samples);
 }
 
-#define QPSX_VERSION "396"
+#define QPSX_VERSION "398"
 #define QPSX_GLOBAL_CONFIG_PATH "/mnt/sda1/cores/config/pcsx4all.cfg"
 #define QPSX_NATIVE_CONFIG_PATH "/mnt/sda1/cores/config/psx_native.cfg"
 #define QPSX_ASM_CONFIG_PATH "/mnt/sda1/cores/config/psx_asm.cfg"
@@ -1085,7 +1085,7 @@ static struct {
     int target_speed;     /* v335: 40-100%, step 10%, 100=normal */
     int resampler_type;   /* v338: 0=Linear(fast), 1=Cubic(better) */
     char bios_file[64];
-    int cycle_mult;       /* 256-2048, step 128 */
+    int cycle_mult;       /* 256-4096, step 128 (v398: max increased from 2048) */
     int cycle_jump;       /* v370: Cycle adjustment step: 32/64/128/256 (default 128) */
 
     /* SPU */
@@ -3234,6 +3234,7 @@ static void handle_menu_input(void)
         menu_active = 0;
         menu_first_frame = 1;
         start_hold_frames = 0;
+        cdda_tools_active = 0;  /* v397: Reset submenu flag on close */
         qpsx_apply_config();
         prev_x = cur_x;
         prev_start = cur_start;
@@ -3278,7 +3279,7 @@ static void handle_menu_input(void)
                     /* v370: Use cycle_jump for step, align to multiples */
                     int step = qpsx_config.cycle_jump;
                     int val = qpsx_config.cycle_mult - step;
-                    if (val < 256) val = 2048;
+                    if (val < 256) val = 4096;  /* v398: max increased to 4096 */
                     /* Align to multiple of step */
                     val = (val / step) * step;
                     if (val < 256) val = 256;
@@ -3324,10 +3325,10 @@ static void handle_menu_input(void)
                     /* v370: Use cycle_jump for step, align to multiples */
                     int step = qpsx_config.cycle_jump;
                     int val = qpsx_config.cycle_mult + step;
-                    if (val > 2048) val = 256;
+                    if (val > 4096) val = 256;  /* v398: max increased to 4096 */
                     /* Align to multiple of step */
                     val = (val / step) * step;
-                    if (val > 2048) val = 2048;
+                    if (val > 4096) val = 4096;  /* v398: max increased to 4096 */
                     qpsx_config.cycle_mult = val;
                 } break;
                 case MI_CYCLE_JUMP: {
@@ -3433,6 +3434,7 @@ static void handle_menu_input(void)
                 menu_active = 0;
                 menu_first_frame = 1;
                 start_hold_frames = 0;
+                cdda_tools_active = 0;  /* v397: Reset submenu flag on exit */
                 qpsx_apply_config();
                 break;
         }
@@ -3934,6 +3936,18 @@ bool retro_load_game(const struct retro_game_info *info)
 void retro_unload_game(void)
 {
     XLOG("=== retro_unload_game() ===");
+
+    /* v397: Proper cleanup on game unload to prevent hangs */
+
+    /* Flush and close memory card files */
+    extern void sioSyncMcds(void);
+    sioSyncMcds();
+    XLOG("v397: Memory cards synced");
+
+    /* Stop CDDA playback before CDR_close */
+    extern long CDR_stop(void);
+    CDR_stop();
+    XLOG("v397: CDDA stopped");
 }
 
 unsigned retro_get_region(void) { return RETRO_REGION_NTSC; }
