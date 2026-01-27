@@ -4,7 +4,6 @@ setlocal enabledelayedexpansion
 REM ========================================
 REM QPSX SF2000 Build Script (Multicore Official)
 REM Uses: C:\Temp\sf2000_multicore_official
-REM This is the default build script - same as build_sf2000_mc.bat
 REM ========================================
 
 for %%I in (.) do set FOLDER_NAME=%%~nxI

@@ -364,6 +364,17 @@ int g_target_speed = 100;
 /* v338: Audio resampler type - 0=Linear(fast), 1=Cubic+LUT(slower,better) */
 static int g_resampler_type = 0;
 
+/* v388: Sound buffering - lower threshold to reduce false stretching
+ * Threshold 64 = only stretch when buffer CRITICALLY low
+ * At 100% speed: buffer rarely drops below 100, so no unnecessary stretching
+ * At 50% speed: buffer drops to 50-80 range, stretch triggers correctly */
+extern "C" int qpsx_sound_mode = 1;  /* v392: 0=OFF(silence), 1=ON(normal), 2=TURBO(small buffer) */
+static int16_t g_silence_buffer[1024 * 2] = {0};  /* v392: Pre-zeroed silence buffer for Sound OFF */
+static int16_t g_audio_buffer[512 * 2];   /* 2KB buffer for cache efficiency */
+static int g_audio_buffer_pos = 0;
+#define AUDIO_CHUNK_SIZE 256              /* Output chunks: ~5.8ms */
+#define AUDIO_CHUNK_THRESHOLD 64          /* v388: Lower threshold = less false stretching */
+
 /* v335: Fixed-point audio resampler for target speed */
 #define FP_SHIFT 16
 #define FP_ONE (1 << FP_SHIFT)
@@ -621,11 +632,57 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
         return;
     }
 
+    /*
+     * v385: SOUND BUFFERING with SMALL CHUNKS (~5.8ms instead of ~23ms)
+     * Smaller chunks = stretching less audible (ear doesn't notice <10ms repeats)
+     * Uses while loop to output multiple chunks if we received many samples
+     */
+    if (qpsx_sound_mode == 2 && samples > 0) {
+        /* Add incoming samples to buffer (max 512) */
+        int space = 512 - g_audio_buffer_pos;
+        int to_copy = (samples < space) ? samples : space;
+        for (int i = 0; i < to_copy * 2; i++) {
+            g_audio_buffer[g_audio_buffer_pos * 2 + i] = buf[i];
+        }
+        g_audio_buffer_pos += to_copy;
+
+        /* Output in small chunks (256 samples = ~5.8ms) */
+        while (g_audio_buffer_pos >= AUDIO_CHUNK_THRESHOLD) {
+            int have = (g_audio_buffer_pos > AUDIO_CHUNK_SIZE) ? AUDIO_CHUNK_SIZE : g_audio_buffer_pos;
+            int need = AUDIO_CHUNK_SIZE;  /* Always output 256 samples */
+            
+            if (have >= need) {
+                /* Enough samples - output directly */
+                audio_batch_cb(g_audio_buffer, need);
+            } else {
+                /* Stretch: have samples -> need samples (e.g., 128 -> 256 = 2x) */
+                int ratio_fp = (have << 8) / need;  /* Fixed point 8.8 */
+                int pos_fp = 0;
+                for (int i = 0; i < need; i++) {
+                    int src_idx = pos_fp >> 8;
+                    if (src_idx >= have) src_idx = have - 1;
+                    g_resample_buffer[i * 2] = g_audio_buffer[src_idx * 2];
+                    g_resample_buffer[i * 2 + 1] = g_audio_buffer[src_idx * 2 + 1];
+                    pos_fp += ratio_fp;
+                }
+                audio_batch_cb(g_resample_buffer, need);
+            }
+            
+            /* Remove consumed samples, shift remainder to front */
+            int consumed = have;
+            g_audio_buffer_pos -= consumed;
+            for (int i = 0; i < g_audio_buffer_pos * 2; i++) {
+                g_audio_buffer[i] = g_audio_buffer[consumed * 2 + i];
+            }
+        }
+        return;
+    }
+
     /* Normal output */
     audio_batch_cb(buf, samples);
 }
 
-#define QPSX_VERSION "374"
+#define QPSX_VERSION "393"
 #define QPSX_GLOBAL_CONFIG_PATH "/mnt/sda1/cores/config/pcsx4all.cfg"
 #define QPSX_NATIVE_CONFIG_PATH "/mnt/sda1/cores/config/psx_native.cfg"
 #define QPSX_ASM_CONFIG_PATH "/mnt/sda1/cores/config/psx_asm.cfg"
@@ -653,7 +710,8 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
 #define AUDIO_FLAG_CDDA_DISABLE  (1 << 1)  /* bit 1: disable CDDA audio */
 #define AUDIO_FLAG_CDDA_BINSAV   (1 << 2)  /* bit 2: use .binadpcm/.binwav */
 #define AUDIO_FLAG_USE_BIOS      (1 << 3)  /* bit 3: use real BIOS */
-/* bits 4-7: reserved */
+#define AUDIO_FLAG_SOUND_BUFFER  (1 << 4)  /* bit 4: v384 sound buffering ON */
+/* bits 5-7: reserved */
 
 /* DEBUG_FLAGS (1 byte = 8 debug/display boolean options) */
 #define DEBUG_FLAG_SHOW_FPS    (1 << 0)  /* bit 0: show FPS */
@@ -684,31 +742,7 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
 #define FLAG_WRITE(flags, bit, val) \
     do { if (val) FLAG_SET(flags, bit); else FLAG_CLEAR(flags, bit); } while(0)
 
-/* v320: Safe mode - detect crash on startup and open config menu */
-static int safe_mode_triggered = 0;
-static int safe_mode_frames = 0;
-#define SAFE_MODE_FRAMES 175  /* Mark as stable after 3.5 seconds (~175 frames at 50fps) */
-
-static void safe_mode_write_marker(void) {
-    FILE *f = fopen(QPSX_CRASH_MARKER_PATH, "w");
-    if (f) {
-        fprintf(f, "1\n");
-        fclose(f);
-    }
-}
-
-static void safe_mode_remove_marker(void) {
-    remove(QPSX_CRASH_MARKER_PATH);
-}
-
-static int safe_mode_check_marker(void) {
-    FILE *f = fopen(QPSX_CRASH_MARKER_PATH, "r");
-    if (f) {
-        fclose(f);
-        return 1;  /* Crash marker exists - previous run crashed */
-    }
-    return 0;
-}
+/* v377: Safe mode REMOVED (dead code, didn't work) */
 
 /* ============== CD SWAP FILE BROWSER (v284) ============== */
 /*
@@ -741,14 +775,10 @@ extern void (*cdrIsoMultidiskCallback)(void);
 extern u32 cycle_multiplier;
 #endif
 
-/* ============== NATIVE COMMAND MENU (v244) ============== */
-static int native_cmd_menu_active = 0;       /* Menu is currently displayed */
-static int native_cmd_menu_shown = 0;        /* Menu was already shown this session */
-static int native_cmd_menu_scroll = 0;       /* Scroll offset */
-static int native_cmd_menu_selected = 0;     /* Selected item index */
-static int native_cmd_menu_enable = 1;       /* Show menu at startup (from config) */
+/* ============== NATIVE COMMAND (v244 - v377: MENU REMOVED, runtime check KEPT) ============== */
+/* v377: Menu UI code REMOVED. Only native_cmd_list and native_cmd_check_enabled() kept for dynarec. */
 
-/* Command list - embedded here for simplicity */
+/* Command list - kept for native_cmd_check_enabled() runtime opcode checking */
 #define NCMD_MAX 128
 typedef struct {
     const char* name;
@@ -928,156 +958,20 @@ extern "C" int native_cmd_check_enabled(u32 psx_opcode)
     return 0;
 }
 
-/* ============== ASM SELECT MENU (v285) ============== */
-/*
- * Dynarec ASM Optimization Menu
- *
- * Purpose: Toggle individual opcode ASM replacements for debugging.
- * All items start GRAY (not implemented) - will be enabled as we port opcodes.
- *
- * Unlike Native Mode (block-level decision), ASM Select allows per-opcode
- * toggling, making it easy to isolate crashes during ASM porting.
- */
-static int asm_cmd_menu_active = 0;       /* Menu is currently displayed */
-static int asm_cmd_menu_scroll = 0;       /* Scroll offset */
-static int asm_cmd_menu_selected = 0;     /* Selected item index */
-
-/* ASM Select list - all opcodes for potential ASM optimization */
-#define ASMCMD_MAX 128
-typedef struct {
-    const char* name;
-    int opcode;      /* -1=START, -2=separator, -3=save, -4=reset */
-    int implemented; /* 1 = ASM version exists, 0 = not yet ported */
-    int enabled;     /* User toggle (only works if implemented) */
-} asm_cmd_entry_t;
-
-static asm_cmd_entry_t asm_cmd_list[ASMCMD_MAX] = {
-    {">>> START EMULATOR <<<", -1, 1, 1},
-    {"--- Save/Reset ---", -2, 0, 0},
-    {"SAVE OPTIONS", -3, 1, 1},
-    {"RESET TO DEFAULTS", -4, 1, 1},
-    {"", -2, 0, 0},  /* Empty separator */
-    {"=== PHASE 1: ALU ===", -2, 0, 0},
-    {"--- ALU Immediate ---", -2, 0, 0},
-    {"ADDIU",  0x09, 1, 0},   /* v286: ASM implemented! */
-    {"ADDI",   0x08, 1, 0},   /* v288: Uses ADDIU (same function) */
-    {"SLTI",   0x0A, 1, 0},   /* v288: ASM implemented! */
-    {"SLTIU",  0x0B, 1, 0},   /* v288: ASM implemented! */
-    {"ANDI",   0x0C, 1, 0},   /* v288: ASM implemented! */
-    {"ORI",    0x0D, 1, 0},   /* v288: ASM implemented! */
-    {"XORI",   0x0E, 1, 0},   /* v288: ASM implemented! */
-    {"LUI",    0x0F, 1, 0},   /* v286: ASM implemented! */
-    {"--- ALU Register ---", -2, 0, 0},
-    {"ADDU",   0x221, 1, 0},  /* v288: ASM implemented! */
-    {"ADD",    0x220, 1, 0},  /* v288: Uses ADDU (same function) */
-    {"SUBU",   0x223, 1, 0},  /* v288: ASM implemented! */
-    {"SUB",    0x222, 1, 0},  /* v288: Uses SUBU (same function) */
-    {"AND",    0x224, 1, 0},  /* v288: ASM implemented! */
-    {"OR",     0x225, 1, 0},  /* v288: ASM implemented! */
-    {"XOR",    0x226, 1, 0},  /* v288: ASM implemented! */
-    {"NOR",    0x227, 1, 0},  /* v288: ASM implemented! */
-    {"SLT",    0x22A, 1, 0},  /* v288: ASM implemented! */
-    {"SLTU",   0x22B, 1, 0},  /* v288: ASM implemented! */
-    {"--- Shift ---", -2, 0, 0},
-    {"SLL",    0x200, 1, 0},  /* v289: ASM implemented! */
-    {"SRL",    0x202, 1, 0},  /* v289: ASM implemented! */
-    {"SRA",    0x203, 1, 0},  /* v289: ASM implemented! */
-    {"SLLV",   0x204, 1, 0},  /* v289: ASM implemented! */
-    {"SRLV",   0x206, 1, 0},  /* v289: ASM implemented! */
-    {"SRAV",   0x207, 1, 0},  /* v289: ASM implemented! */
-    {"", -2, 0, 0},
-    {"=== PHASE 2: MEMORY ===", -2, 0, 0},
-    {"--- Load ---", -2, 0, 0},
-    {"LW",     0x23, 1, 0},  /* v290: ASM implemented! */
-    {"LH",     0x21, 1, 0},  /* v290: ASM implemented! */
-    {"LHU",    0x25, 1, 0},  /* v290: ASM implemented! */
-    {"LB",     0x20, 1, 0},  /* v290: ASM implemented! */
-    {"LBU",    0x24, 1, 0},  /* v290: ASM implemented! */
-    {"LWL",    0x22, 1, 0},  /* v290: ASM implemented! */
-    {"LWR",    0x26, 1, 0},  /* v290: ASM implemented! */
-    {"--- Store ---", -2, 0, 0},
-    {"SW",     0x2B, 1, 0},  /* v290: ASM implemented! */
-    {"SH",     0x29, 1, 0},  /* v290: ASM implemented! */
-    {"SB",     0x28, 1, 0},  /* v290: ASM implemented! */
-    {"SWL",    0x2A, 1, 0},  /* v290: ASM implemented! */
-    {"SWR",    0x2E, 1, 0},  /* v290: ASM implemented! */
-    {"", -2, 0, 0},
-    {"=== PHASE 3: CONTROL ===", -2, 0, 0},
-    {"--- Branch ---", -2, 0, 0},
-    {"BEQ",    0x04, 1, 0},   /* v291: ASM implemented! */
-    {"BNE",    0x05, 1, 0},   /* v291: ASM implemented! */
-    {"BLEZ",   0x06, 1, 0},   /* v291: ASM implemented! */
-    {"BGTZ",   0x07, 1, 0},   /* v291: ASM implemented! */
-    {"BLTZ",   0x100, 1, 0},  /* v291: ASM implemented! */
-    {"BGEZ",   0x101, 1, 0},  /* v291: ASM implemented! */
-    {"BLTZAL", 0x110, 1, 0},  /* v291: ASM implemented! */
-    {"BGEZAL", 0x111, 1, 0},  /* v291: ASM implemented! */
-    {"--- Jump ---", -2, 0, 0},
-    {"J",      0x02, 1, 0},   /* v291: ASM implemented! */
-    {"JAL",    0x03, 1, 0},   /* v291: ASM implemented! */
-    {"JR",     0x208, 1, 0},  /* v291: ASM implemented! */
-    {"JALR",   0x209, 1, 0},  /* v291: ASM implemented! */
-    {"", -2, 0, 0},
-    {"=== PHASE 4: MDU ===", -2, 0, 0},
-    {"--- Multiply/Divide ---", -2, 0, 0},
-    {"MULT",   0x218, 1, 0},  /* v292: ASM implemented! */
-    {"MULTU",  0x219, 1, 0},  /* v292: ASM implemented! */
-    {"DIV",    0x21A, 1, 0},  /* v292: ASM implemented! */
-    {"DIVU",   0x21B, 1, 0},  /* v292: ASM implemented! */
-    {"MFHI",   0x210, 1, 0},  /* v292: ASM implemented! */
-    {"MFLO",   0x212, 1, 0},  /* v292: ASM implemented! */
-    {"MTHI",   0x211, 1, 0},  /* v292: ASM implemented! */
-    {"MTLO",   0x213, 1, 0},  /* v292: ASM implemented! */
-    {"", -2, 0, 0},
-    {"=== PHASE 5: SYSTEM ===", -2, 0, 0},
-    {"--- COP0 ---", -2, 0, 0},
-    {"MFC0",   0x400, 1, 0},  /* v293: ASM implemented! */
-    {"MTC0",   0x404, 1, 0},  /* v293: ASM implemented! */
-    {"CFC0",   0x402, 1, 0},  /* v293: ASM implemented! */
-    {"CTC0",   0x406, 1, 0},  /* v293: ASM implemented! */
-    {"RFE",    0x410, 1, 0},  /* v293: ASM implemented! */
-    {"--- GTE Transfer ---", -2, 0, 0},
-    {"MFC2",   0x480, 1, 0},  /* v293: ASM implemented! */
-    {"MTC2",   0x484, 1, 0},  /* v293: ASM implemented! */
-    {"CFC2",   0x482, 1, 0},  /* v293: ASM implemented! */
-    {"CTC2",   0x486, 1, 0},  /* v293: ASM implemented! */
-    {"LWC2",   0x32, 1, 0},   /* v293: ASM implemented! */
-    {"SWC2",   0x3A, 1, 0},   /* v293: ASM implemented! */
-    {"--- GTE Runtime ---", -2, 0, 0},
-    {"RTPT NoFlags", -10, 1, 0},  /* v294: Runtime ASM (function pointer) */
-    {"MVMVA NoFlags", -11, 1, 0}, /* v294: Runtime ASM (function pointer) */
-    {"NCLIP",  0x4C0, 0, 0},  /* Dynarec - already inline! */
-    {"RTPS",   0x4C1, 0, 0},  /* Dynarec - not implemented */
-    {"--- Special ---", -2, 0, 0},
-    {"SYSCALL", 0x20C, 0, 0},
-    {"BREAK",   0x20D, 0, 0},
-    {"", -2, 0, 0},
-    {"=== SUBSYSTEMS ===", -2, 0, 0},
-    {"RegCache", -5, 0, 0},   /* Special: register caching system */
-    {"AddrConv", -6, 0, 0},   /* Special: address conversion */
-    {"CodeInv",  -7, 0, 0},   /* Special: code invalidation */
-    {"LoHiCache", -8, 0, 0},  /* Special: LO/HI register cache */
-    {NULL, 0, 0, 0}  /* End marker */
-};
-
-static int asm_cmd_count = 0;  /* Set during init */
-
-/* Initialize ASM command count - called from retro_run() frame 0 */
-static void asm_cmd_init(void) {
-    asm_cmd_count = 0;
-    for (int i = 0; i < ASMCMD_MAX && asm_cmd_list[i].name != NULL; i++) {
-        asm_cmd_count++;
-    }
-    XLOG("asm_cmd: init, %d entries", asm_cmd_count);
-}
-
-/* ASM Select menu colors and functions are defined after RGB565 macro (below) */
+/* v377: ASM SELECT MENU REMOVED (dead code) */
 
 /* ============== FPS COUNTER ============== */
 static int fps_show = 0;
 static int fps_current = 0;
 static int fps_frame_count = 0;
 static unsigned long fps_last_time = 0;
+
+/* v377b: Average GPU FPS over last 40 seconds for better precision */
+#define FPS_AVG_SAMPLES 40
+static int fps_history[FPS_AVG_SAMPLES];  /* Store last 40 GPU fps values */
+static int fps_history_idx = 0;           /* Current write position */
+static int fps_history_count = 0;         /* How many samples we have (0-40) */
+static int fps_avg_x100 = 0;              /* Average * 100 for 2 decimal precision */
 
 /* v295: GPU FPS counter - measures ACTUAL rendered GPU frames */
 extern volatile int gpu_frame_count;  /* Defined in port.cpp */
@@ -1123,7 +1017,7 @@ static unsigned long get_time_ms(void)
 #define MENU_W      290
 #define MENU_H      220
 #define MENU_LINE_H 10
-#define MENU_VISIBLE 17
+#define MENU_VISIBLE 15
 
 /* ============== MENU STATE ============== */
 static int menu_active = 0;
@@ -1376,7 +1270,7 @@ typedef struct {
 } MenuItem;
 
 /* v367: Menu with GPU/SMC/Dynarec HARDCODED like v066 */
-#define MENU_ITEMS 38
+#define MENU_ITEMS 39
 enum {
     MI_SEP_HEADER = 0,
     MI_SWAP_CD,         /* Swap CD for multi-disc */
@@ -1390,12 +1284,11 @@ enum {
     MI_PLAYER2,       /* v368: Player 2 enable (default OFF) */
     MI_DEBUG_LOG,
     MI_SEP_AUDIO,
-    MI_XA_AUDIO,
+    MI_SOUND,           /* v392: Sound OFF/ON/TURBO */
     MI_CDDA_MODE,       /* v367: CDDA OFF/PRETEND/ON */
     MI_CDDA_PRELOAD,
     MI_CDDA_TOOLS,
-    MI_SEP_GPU,
-    /* v369: REMOVED MI_PIXEL_SIZE - line doubling removed for v066b speed */
+    /* v375: REMOVED MI_SEP_GPU - no GPU options left */
     MI_SEP_REMAP,
     MI_RESTORE_PAD,
     MI_REMAP_A,
@@ -1413,6 +1306,7 @@ enum {
     MI_SAVE_SLUS,
     MI_SAVE_GLOBAL,
     MI_DEL_GAME,
+    MI_DEL_SLUS,
     MI_DEL_GLOBAL,
     MI_SEP_EXIT,
     MI_EXIT
@@ -1423,7 +1317,7 @@ enum {
  * GPU options (except Pixel Size), SMC Check, Dynarec options = HARDCODED
  */
 static const MenuItem menu_items[MENU_ITEMS] = {
-    {"--- QPSX v374 ---",   1, 0},
+    {"--- QPSX v376 ---",   1, 0},
     {">> SWAP CD <<",       2, 0},
     {"Frameskip",           0, 0},
     {"Target Speed",        0, 1},
@@ -1435,12 +1329,11 @@ static const MenuItem menu_items[MENU_ITEMS] = {
     {"Player 2",            0, 0},  /* v368: Enable player 2 input */
     {"Debug Log",           0, 0},
     {"--- AUDIO ---",       1, 0},
-    {"XA Audio",            0, 1},
+    {"Sound",              0, 1},  /* v392: OFF/ON/TURBO */
     {"CDDA Mode",           0, 0},  /* v367: OFF/PRETEND/ON */
     {"CDDA Preload",        0, 0},
     {"CDDA Tools",          2, 0},
-    {"--- GPU ---",         1, 0},
-    /* v369: Pixel Size REMOVED - adds overhead */
+    /* v375: GPU separator removed - no GPU options left */
     {"--- REMAP PAD ---",   1, 0},
     {"Restore Defaults",    2, 0},
     {"Button A",            0, 0},
@@ -1458,6 +1351,7 @@ static const MenuItem menu_items[MENU_ITEMS] = {
     {"SAVE SLUS CFG",       2, 0},
     {"SAVE GLOBAL CFG",     2, 0},
     {"DEL GAME CFG",        2, 0},
+    {"DEL SLUS CFG",        2, 0},
     {"DEL GLOBAL CFG",      2, 0},
     {"--------------",      1, 0},
     {"EXIT MENU",           2, 0}
@@ -1596,652 +1490,9 @@ static const char *remap_btn_names[14] = {
     "Start", "Select", "Up", "Down", "Left", "Right"
 };
 
-static void native_cmd_menu_init(void) {
-    /* Count items */
-    native_cmd_count = 0;
-    for (int i = 0; i < NCMD_MAX && native_cmd_list[i].name != NULL; i++) {
-        native_cmd_count++;
-    }
-    native_cmd_update_any_enabled();
-}
+/* v377: native_cmd_menu functions REMOVED (dead code - init moved to retro_run) */
 
-static void native_cmd_menu_load_config(void) {
-    FILE *f = fopen(QPSX_NATIVE_CONFIG_PATH, "r");
-    if (!f) return;
-
-    char line[128];
-    while (fgets(line, sizeof(line), f)) {
-        /* Parse "NAME=0" or "NAME=1" */
-        char name[32];
-        int val;
-        if (sscanf(line, "%31[^=]=%d", name, &val) == 2) {
-            for (int i = 0; i < native_cmd_count; i++) {
-                if (native_cmd_list[i].implemented &&
-                    strcmp(native_cmd_list[i].name, name) == 0) {
-                    native_cmd_list[i].enabled = val ? 1 : 0;
-                    break;
-                }
-            }
-        }
-    }
-    fclose(f);
-    XLOG("native_cmd: loaded config");
-    native_cmd_update_any_enabled();
-}
-
-static void native_cmd_menu_save_config(void) {
-    FILE *f = fopen(QPSX_NATIVE_CONFIG_PATH, "w");
-    if (!f) {
-        XLOG("native_cmd: cannot save config");
-        return;
-    }
-
-    fprintf(f, "# QPSX Native Command Config v%s\n", QPSX_VERSION);
-    for (int i = 0; i < native_cmd_count; i++) {
-        if (native_cmd_list[i].implemented && native_cmd_list[i].opcode >= 0) {
-            fprintf(f, "%s=%d\n", native_cmd_list[i].name, native_cmd_list[i].enabled);
-        }
-    }
-    fclose(f);
-    XLOG("native_cmd: saved config");
-}
-
-/* ============== ASM SELECT MENU FUNCTIONS (v285) ============== */
-/* Colors for ASM Select menu */
-#define ASMCMD_COLOR_BG       RGB565(0, 32, 0)       /* Dark green background */
-#define ASMCMD_COLOR_TITLE    RGB565(255, 255, 255)  /* White title */
-#define ASMCMD_COLOR_ENABLED  RGB565(0, 255, 0)      /* Green - enabled */
-#define ASMCMD_COLOR_DISABLED RGB565(255, 64, 64)    /* Red - disabled */
-#define ASMCMD_COLOR_NOTIMPL  RGB565(128, 128, 128)  /* Gray - not implemented */
-#define ASMCMD_COLOR_SEPARATOR RGB565(0, 255, 255)   /* Cyan - phase headers */
-#define ASMCMD_COLOR_SELECTED RGB565(64, 128, 64)    /* Dark green - selected bg */
-#define ASMCMD_COLOR_START    RGB565(255, 255, 0)    /* Yellow - START */
-#define ASMCMD_COLOR_ACTION   RGB565(255, 128, 0)    /* Orange - actions */
-
-#define ASMCMD_VISIBLE_ITEMS  20
-#define ASMCMD_LINE_HEIGHT    10
-#define ASMCMD_MENU_X         10
-#define ASMCMD_MENU_Y         18
-
-/* v288: Helper to sync global toggles from asm_cmd_list */
-static void asm_cmd_sync_globals(void) {
-    extern int g_asm_addiu_enabled, g_asm_lui_enabled;
-    extern int g_asm_slti_enabled, g_asm_sltiu_enabled;
-    extern int g_asm_andi_enabled, g_asm_ori_enabled, g_asm_xori_enabled;
-    extern int g_asm_addu_enabled, g_asm_subu_enabled;
-    extern int g_asm_and_enabled, g_asm_or_enabled, g_asm_xor_enabled, g_asm_nor_enabled;
-    extern int g_asm_slt_enabled, g_asm_sltu_enabled;
-    /* v289: Shift toggles */
-    extern int g_asm_sll_enabled, g_asm_srl_enabled, g_asm_sra_enabled;
-    extern int g_asm_sllv_enabled, g_asm_srlv_enabled, g_asm_srav_enabled;
-    /* v290: Load/Store toggles */
-    extern int g_asm_lw_enabled, g_asm_lh_enabled, g_asm_lhu_enabled;
-    extern int g_asm_lb_enabled, g_asm_lbu_enabled, g_asm_lwl_enabled, g_asm_lwr_enabled;
-    extern int g_asm_sw_enabled, g_asm_sh_enabled, g_asm_sb_enabled;
-    extern int g_asm_swl_enabled, g_asm_swr_enabled;
-    /* v291: Branch/Jump toggles */
-    extern int g_asm_beq_enabled, g_asm_bne_enabled, g_asm_blez_enabled, g_asm_bgtz_enabled;
-    extern int g_asm_bltz_enabled, g_asm_bgez_enabled, g_asm_bltzal_enabled, g_asm_bgezal_enabled;
-    extern int g_asm_j_enabled, g_asm_jal_enabled, g_asm_jr_enabled, g_asm_jalr_enabled;
-    /* v292: MDU toggles */
-    extern int g_asm_mult_enabled, g_asm_multu_enabled, g_asm_div_enabled, g_asm_divu_enabled;
-    extern int g_asm_mfhi_enabled, g_asm_mflo_enabled, g_asm_mthi_enabled, g_asm_mtlo_enabled;
-    /* v293: CP0 toggles */
-    extern int g_asm_mfc0_enabled, g_asm_mtc0_enabled, g_asm_cfc0_enabled, g_asm_ctc0_enabled;
-    extern int g_asm_rfe_enabled;
-    /* v293: GTE toggles */
-    extern int g_asm_mfc2_enabled, g_asm_mtc2_enabled, g_asm_cfc2_enabled, g_asm_ctc2_enabled;
-    extern int g_asm_lwc2_enabled, g_asm_swc2_enabled;
-
-    for (int i = 0; i < asm_cmd_count; i++) {
-        asm_cmd_entry_t *e = &asm_cmd_list[i];
-        if (!e->implemented) continue;
-        switch (e->opcode) {
-            case 0x08: case 0x09: g_asm_addiu_enabled = e->enabled; break;
-            case 0x0A: g_asm_slti_enabled = e->enabled; break;
-            case 0x0B: g_asm_sltiu_enabled = e->enabled; break;
-            case 0x0C: g_asm_andi_enabled = e->enabled; break;
-            case 0x0D: g_asm_ori_enabled = e->enabled; break;
-            case 0x0E: g_asm_xori_enabled = e->enabled; break;
-            case 0x0F: g_asm_lui_enabled = e->enabled; break;
-            case 0x220: case 0x221: g_asm_addu_enabled = e->enabled; break;
-            case 0x222: case 0x223: g_asm_subu_enabled = e->enabled; break;
-            case 0x224: g_asm_and_enabled = e->enabled; break;
-            case 0x225: g_asm_or_enabled = e->enabled; break;
-            case 0x226: g_asm_xor_enabled = e->enabled; break;
-            case 0x227: g_asm_nor_enabled = e->enabled; break;
-            case 0x22A: g_asm_slt_enabled = e->enabled; break;
-            case 0x22B: g_asm_sltu_enabled = e->enabled; break;
-            /* v289: Shift opcodes */
-            case 0x200: g_asm_sll_enabled = e->enabled; break;
-            case 0x202: g_asm_srl_enabled = e->enabled; break;
-            case 0x203: g_asm_sra_enabled = e->enabled; break;
-            case 0x204: g_asm_sllv_enabled = e->enabled; break;
-            case 0x206: g_asm_srlv_enabled = e->enabled; break;
-            case 0x207: g_asm_srav_enabled = e->enabled; break;
-            /* v290: Load opcodes */
-            case 0x23: g_asm_lw_enabled = e->enabled; break;
-            case 0x21: g_asm_lh_enabled = e->enabled; break;
-            case 0x25: g_asm_lhu_enabled = e->enabled; break;
-            case 0x20: g_asm_lb_enabled = e->enabled; break;
-            case 0x24: g_asm_lbu_enabled = e->enabled; break;
-            case 0x22: g_asm_lwl_enabled = e->enabled; break;
-            case 0x26: g_asm_lwr_enabled = e->enabled; break;
-            /* v290: Store opcodes */
-            case 0x2B: g_asm_sw_enabled = e->enabled; break;
-            case 0x29: g_asm_sh_enabled = e->enabled; break;
-            case 0x28: g_asm_sb_enabled = e->enabled; break;
-            case 0x2A: g_asm_swl_enabled = e->enabled; break;
-            case 0x2E: g_asm_swr_enabled = e->enabled; break;
-            /* v291: Branch opcodes */
-            case 0x04: g_asm_beq_enabled = e->enabled; break;
-            case 0x05: g_asm_bne_enabled = e->enabled; break;
-            case 0x06: g_asm_blez_enabled = e->enabled; break;
-            case 0x07: g_asm_bgtz_enabled = e->enabled; break;
-            /* v291: REGIMM branch opcodes */
-            case 0x100: g_asm_bltz_enabled = e->enabled; break;
-            case 0x101: g_asm_bgez_enabled = e->enabled; break;
-            case 0x110: g_asm_bltzal_enabled = e->enabled; break;
-            case 0x111: g_asm_bgezal_enabled = e->enabled; break;
-            /* v291: Jump opcodes */
-            case 0x02: g_asm_j_enabled = e->enabled; break;
-            case 0x03: g_asm_jal_enabled = e->enabled; break;
-            case 0x208: g_asm_jr_enabled = e->enabled; break;
-            case 0x209: g_asm_jalr_enabled = e->enabled; break;
-            /* v292: MDU opcodes */
-            case 0x218: g_asm_mult_enabled = e->enabled; break;
-            case 0x219: g_asm_multu_enabled = e->enabled; break;
-            case 0x21A: g_asm_div_enabled = e->enabled; break;
-            case 0x21B: g_asm_divu_enabled = e->enabled; break;
-            case 0x210: g_asm_mfhi_enabled = e->enabled; break;
-            case 0x212: g_asm_mflo_enabled = e->enabled; break;
-            case 0x211: g_asm_mthi_enabled = e->enabled; break;
-            case 0x213: g_asm_mtlo_enabled = e->enabled; break;
-            /* v293: CP0 opcodes */
-            case 0x400: g_asm_mfc0_enabled = e->enabled; break;
-            case 0x404: g_asm_mtc0_enabled = e->enabled; break;
-            case 0x402: g_asm_cfc0_enabled = e->enabled; break;
-            case 0x406: g_asm_ctc0_enabled = e->enabled; break;
-            case 0x410: g_asm_rfe_enabled = e->enabled; break;
-            /* v293: GTE transfer opcodes */
-            case 0x480: g_asm_mfc2_enabled = e->enabled; break;
-            case 0x484: g_asm_mtc2_enabled = e->enabled; break;
-            case 0x482: g_asm_cfc2_enabled = e->enabled; break;
-            case 0x486: g_asm_ctc2_enabled = e->enabled; break;
-            case 0x32: g_asm_lwc2_enabled = e->enabled; break;
-            case 0x3A: g_asm_swc2_enabled = e->enabled; break;
-            /* v294: GTE runtime (function pointer dispatch) */
-            case -10: g_opt_gte_rtpt_asm = e->enabled; break;
-            case -11: g_opt_gte_mvmva_asm = e->enabled; break;
-        }
-    }
-    /* v294: Update GTE function pointers */
-    gte_update_dispatch();
-}
-
-/* v288: Load ASM Select config from file */
-static void asm_cmd_menu_load_config(void) {
-    FILE *f = fopen(QPSX_ASM_CONFIG_PATH, "r");
-    if (!f) return;
-
-    char line[128];
-    while (fgets(line, sizeof(line), f)) {
-        char name[32];
-        int val;
-        if (sscanf(line, "%31[^=]=%d", name, &val) == 2) {
-            for (int i = 0; i < asm_cmd_count; i++) {
-                if (asm_cmd_list[i].implemented &&
-                    strcmp(asm_cmd_list[i].name, name) == 0) {
-                    asm_cmd_list[i].enabled = val ? 1 : 0;
-                    break;
-                }
-            }
-        }
-    }
-    fclose(f);
-    asm_cmd_sync_globals();
-    XLOG("asm_cmd: loaded config from %s", QPSX_ASM_CONFIG_PATH);
-}
-
-/* v288: Save ASM Select config to file */
-static void asm_cmd_menu_save_config(void) {
-    FILE *f = fopen(QPSX_ASM_CONFIG_PATH, "w");
-    if (!f) {
-        XLOG("asm_cmd: cannot save config to %s", QPSX_ASM_CONFIG_PATH);
-        return;
-    }
-
-    fprintf(f, "# QPSX ASM Select Config v%s\n", QPSX_VERSION);
-    for (int i = 0; i < asm_cmd_count; i++) {
-        if (asm_cmd_list[i].implemented && asm_cmd_list[i].opcode >= 0) {
-            fprintf(f, "%s=%d\n", asm_cmd_list[i].name, asm_cmd_list[i].enabled);
-        }
-    }
-    fclose(f);
-    XLOG("asm_cmd: saved config to %s", QPSX_ASM_CONFIG_PATH);
-}
-
-static void draw_asm_cmd_menu(uint16_t *buffer) {
-    /* Clear to dark green background */
-    for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
-        buffer[i] = ASMCMD_COLOR_BG;
-    }
-
-    /* Title */
-    char title_buf[64];
-    snprintf(title_buf, sizeof(title_buf), "ASM SELECT v%s - Dynarec Optimizer", QPSX_VERSION);
-    DrawText(buffer, 30, 4, ASMCMD_COLOR_TITLE, title_buf);
-    DrawSeparator(buffer, 10, 14, SCREEN_WIDTH - 20, ASMCMD_COLOR_TITLE);
-
-    /* Draw menu items */
-    int y = ASMCMD_MENU_Y;
-    int start_idx = asm_cmd_menu_scroll;
-    int end_idx = start_idx + ASMCMD_VISIBLE_ITEMS;
-    if (end_idx > asm_cmd_count) end_idx = asm_cmd_count;
-
-    for (int i = start_idx; i < end_idx; i++) {
-        asm_cmd_entry_t *entry = &asm_cmd_list[i];
-        char line[64];
-        uint16_t text_color;
-
-        /* Highlight selected item */
-        if (i == asm_cmd_menu_selected) {
-            DrawFBox(buffer, 0, y - 1, SCREEN_WIDTH, ASMCMD_LINE_HEIGHT, ASMCMD_COLOR_SELECTED);
-        }
-
-        /* Determine color and text based on entry type */
-        if (entry->opcode == -1) {
-            /* START button */
-            text_color = ASMCMD_COLOR_START;
-            snprintf(line, sizeof(line), "  %s", entry->name);
-        } else if (entry->opcode == -2) {
-            /* Separator/Phase header */
-            if (entry->name[0] == '=') {
-                text_color = ASMCMD_COLOR_SEPARATOR;
-            } else {
-                text_color = ASMCMD_COLOR_NOTIMPL;
-            }
-            snprintf(line, sizeof(line), "%s", entry->name);
-        } else if (entry->opcode == -3 || entry->opcode == -4) {
-            /* Action buttons */
-            text_color = ASMCMD_COLOR_ACTION;
-            snprintf(line, sizeof(line), "  %s", entry->name);
-        } else if (entry->opcode < -4) {
-            /* Subsystem toggle (special features) */
-            if (!entry->implemented) {
-                text_color = ASMCMD_COLOR_NOTIMPL;
-                snprintf(line, sizeof(line), "[---] %s", entry->name);
-            } else if (entry->enabled) {
-                text_color = ASMCMD_COLOR_ENABLED;
-                snprintf(line, sizeof(line), "[ON ] %s", entry->name);
-            } else {
-                text_color = ASMCMD_COLOR_DISABLED;
-                snprintf(line, sizeof(line), "[OFF] %s", entry->name);
-            }
-        } else {
-            /* Regular opcode */
-            if (!entry->implemented) {
-                text_color = ASMCMD_COLOR_NOTIMPL;
-                snprintf(line, sizeof(line), "[---] %s", entry->name);
-            } else if (entry->enabled) {
-                text_color = ASMCMD_COLOR_ENABLED;
-                snprintf(line, sizeof(line), "[ASM] %s", entry->name);
-            } else {
-                text_color = ASMCMD_COLOR_DISABLED;
-                snprintf(line, sizeof(line), "[C++] %s", entry->name);
-            }
-        }
-
-        DrawText(buffer, ASMCMD_MENU_X, y, text_color, line);
-        y += ASMCMD_LINE_HEIGHT;
-    }
-
-    /* Scroll indicators */
-    if (start_idx > 0) {
-        DrawText(buffer, SCREEN_WIDTH - 30, ASMCMD_MENU_Y, ASMCMD_COLOR_TITLE, "^");
-    }
-    if (end_idx < asm_cmd_count) {
-        DrawText(buffer, SCREEN_WIDTH - 30, y - ASMCMD_LINE_HEIGHT, ASMCMD_COLOR_TITLE, "v");
-    }
-
-    /* Instructions */
-    DrawSeparator(buffer, 10, SCREEN_HEIGHT - 18, SCREEN_WIDTH - 20, ASMCMD_COLOR_TITLE);
-    DrawText(buffer, 4, SCREEN_HEIGHT - 12, ASMCMD_COLOR_TITLE, "U/D:1 L/R:Page A:Toggle START:Run");
-}
-
-/* Update scroll position to keep selection visible */
-static void asm_cmd_update_scroll(void) {
-    if (asm_cmd_menu_selected < asm_cmd_menu_scroll) {
-        asm_cmd_menu_scroll = asm_cmd_menu_selected;
-    }
-    if (asm_cmd_menu_selected >= asm_cmd_menu_scroll + ASMCMD_VISIBLE_ITEMS) {
-        asm_cmd_menu_scroll = asm_cmd_menu_selected - ASMCMD_VISIBLE_ITEMS + 1;
-    }
-}
-
-/* v287: Helper function to move selection up/down with separator skip */
-static void asm_cmd_menu_move_selection(int direction) {
-    int start = asm_cmd_menu_selected;
-    do {
-        asm_cmd_menu_selected += direction;
-        /* Wrap around */
-        if (asm_cmd_menu_selected < 0) asm_cmd_menu_selected = asm_cmd_count - 1;
-        if (asm_cmd_menu_selected >= asm_cmd_count) asm_cmd_menu_selected = 0;
-        /* Safety: don't infinite loop if all are separators */
-        if (asm_cmd_menu_selected == start) break;
-    } while (asm_cmd_list[asm_cmd_menu_selected].opcode == -2);
-    asm_cmd_update_scroll();
-}
-
-/* Handle ASM Select menu input - v287: Same controls as native_cmd_menu */
-static void handle_asm_cmd_menu_input(void) {
-    static uint16_t prev_buttons = 0;
-    uint16_t buttons = ~cached_pad1;  /* Invert because cached_pad1 uses active-low */
-    uint16_t pressed = buttons & ~prev_buttons;
-    prev_buttons = buttons;
-
-    /* UP - move 1 position up with wrap */
-    if (pressed & PSX_BTN_UP) {
-        asm_cmd_menu_move_selection(-1);
-    }
-
-    /* DOWN - move 1 position down with wrap */
-    if (pressed & PSX_BTN_DOWN) {
-        asm_cmd_menu_move_selection(+1);
-    }
-
-    /* LEFT - page up */
-    if (pressed & PSX_BTN_LEFT) {
-        for (int i = 0; i < ASMCMD_VISIBLE_ITEMS; i++) {
-            asm_cmd_menu_move_selection(-1);
-        }
-    }
-
-    /* RIGHT - page down */
-    if (pressed & PSX_BTN_RIGHT) {
-        for (int i = 0; i < ASMCMD_VISIBLE_ITEMS; i++) {
-            asm_cmd_menu_move_selection(+1);
-        }
-    }
-
-    /* A button - toggle or activate */
-    if (pressed & PSX_BTN_A) {
-        asm_cmd_entry_t *entry = &asm_cmd_list[asm_cmd_menu_selected];
-        if (entry->opcode == -1) {
-            /* START EMULATOR */
-            asm_cmd_menu_active = 0;
-            XLOG("asm_cmd: starting emulator");
-        } else if (entry->opcode == -3) {
-            /* SAVE - v288: implemented! */
-            asm_cmd_menu_save_config();
-        } else if (entry->opcode == -4) {
-            /* RESET - reset all to defaults */
-            for (int i = 0; i < asm_cmd_count; i++) {
-                asm_cmd_list[i].enabled = 0;
-            }
-            /* Reset global toggles - v286 */
-            extern int g_asm_addiu_enabled;
-            extern int g_asm_lui_enabled;
-            g_asm_addiu_enabled = 0;
-            g_asm_lui_enabled = 0;
-            /* v288: Reset new ALU toggles */
-            extern int g_asm_slti_enabled, g_asm_sltiu_enabled;
-            extern int g_asm_andi_enabled, g_asm_ori_enabled, g_asm_xori_enabled;
-            extern int g_asm_addu_enabled, g_asm_subu_enabled;
-            extern int g_asm_and_enabled, g_asm_or_enabled, g_asm_xor_enabled, g_asm_nor_enabled;
-            extern int g_asm_slt_enabled, g_asm_sltu_enabled;
-            g_asm_slti_enabled = g_asm_sltiu_enabled = 0;
-            g_asm_andi_enabled = g_asm_ori_enabled = g_asm_xori_enabled = 0;
-            g_asm_addu_enabled = g_asm_subu_enabled = 0;
-            g_asm_and_enabled = g_asm_or_enabled = g_asm_xor_enabled = g_asm_nor_enabled = 0;
-            g_asm_slt_enabled = g_asm_sltu_enabled = 0;
-            XLOG("asm_cmd: RESET to defaults");
-        } else if (entry->opcode >= 0 || entry->opcode < -4) {
-            /* Toggle opcode/subsystem if implemented */
-            if (entry->implemented) {
-                entry->enabled = !entry->enabled;
-                XLOG("asm_cmd: %s now %s", entry->name, entry->enabled ? "ON" : "OFF");
-                /* Update global toggle for dynarec */
-                /* v286: ALU Immediate */
-                if (entry->opcode == 0x09 || entry->opcode == 0x08) {  /* ADDIU/ADDI */
-                    extern int g_asm_addiu_enabled;
-                    g_asm_addiu_enabled = entry->enabled;
-                } else if (entry->opcode == 0x0A) {  /* SLTI */
-                    extern int g_asm_slti_enabled;
-                    g_asm_slti_enabled = entry->enabled;
-                } else if (entry->opcode == 0x0B) {  /* SLTIU */
-                    extern int g_asm_sltiu_enabled;
-                    g_asm_sltiu_enabled = entry->enabled;
-                } else if (entry->opcode == 0x0C) {  /* ANDI */
-                    extern int g_asm_andi_enabled;
-                    g_asm_andi_enabled = entry->enabled;
-                } else if (entry->opcode == 0x0D) {  /* ORI */
-                    extern int g_asm_ori_enabled;
-                    g_asm_ori_enabled = entry->enabled;
-                } else if (entry->opcode == 0x0E) {  /* XORI */
-                    extern int g_asm_xori_enabled;
-                    g_asm_xori_enabled = entry->enabled;
-                } else if (entry->opcode == 0x0F) {  /* LUI */
-                    extern int g_asm_lui_enabled;
-                    g_asm_lui_enabled = entry->enabled;
-                }
-                /* v288: ALU Register (opcode 0x2XX = R-type with funct) */
-                else if (entry->opcode == 0x221 || entry->opcode == 0x220) {  /* ADDU/ADD */
-                    extern int g_asm_addu_enabled;
-                    g_asm_addu_enabled = entry->enabled;
-                } else if (entry->opcode == 0x223 || entry->opcode == 0x222) {  /* SUBU/SUB */
-                    extern int g_asm_subu_enabled;
-                    g_asm_subu_enabled = entry->enabled;
-                } else if (entry->opcode == 0x224) {  /* AND */
-                    extern int g_asm_and_enabled;
-                    g_asm_and_enabled = entry->enabled;
-                } else if (entry->opcode == 0x225) {  /* OR */
-                    extern int g_asm_or_enabled;
-                    g_asm_or_enabled = entry->enabled;
-                } else if (entry->opcode == 0x226) {  /* XOR */
-                    extern int g_asm_xor_enabled;
-                    g_asm_xor_enabled = entry->enabled;
-                } else if (entry->opcode == 0x227) {  /* NOR */
-                    extern int g_asm_nor_enabled;
-                    g_asm_nor_enabled = entry->enabled;
-                } else if (entry->opcode == 0x22A) {  /* SLT */
-                    extern int g_asm_slt_enabled;
-                    g_asm_slt_enabled = entry->enabled;
-                } else if (entry->opcode == 0x22B) {  /* SLTU */
-                    extern int g_asm_sltu_enabled;
-                    g_asm_sltu_enabled = entry->enabled;
-                }
-            } else {
-                XLOG("asm_cmd: %s not yet implemented", entry->name);
-            }
-        }
-    }
-
-    /* START button - start emulator */
-    if (pressed & PSX_BTN_START) {
-        asm_cmd_menu_active = 0;
-        XLOG("asm_cmd: starting emulator (START pressed)");
-    }
-
-    /* B button - start without saving */
-    if (pressed & PSX_BTN_B) {
-        asm_cmd_menu_active = 0;
-        XLOG("asm_cmd: starting emulator (B pressed)");
-    }
-}
-
-static void draw_native_cmd_menu(uint16_t *buffer) {
-    /* Clear to dark background */
-    for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
-        buffer[i] = NCMD_COLOR_BG;
-    }
-
-    /* Title - use QPSX_VERSION */
-    char title_buf[48];
-    snprintf(title_buf, sizeof(title_buf), "NATIVE COMMAND CONFIG v%s", QPSX_VERSION);
-    DrawText(buffer, 50, 4, NCMD_COLOR_TITLE, title_buf);
-    DrawSeparator(buffer, 10, 14, SCREEN_WIDTH - 20, NCMD_COLOR_TITLE);
-
-    /* Draw visible items */
-    int y = NCMD_MENU_Y;
-    int start_idx = native_cmd_menu_scroll;
-    int end_idx = start_idx + NCMD_VISIBLE_ITEMS;
-    if (end_idx > native_cmd_count) end_idx = native_cmd_count;
-
-    for (int i = start_idx; i < end_idx; i++) {
-        native_cmd_entry_t* cmd = &native_cmd_list[i];
-        uint16_t text_color;
-        char line[40];
-
-        /* Selection highlight */
-        if (i == native_cmd_menu_selected) {
-            DrawFBox(buffer, 0, y - 1, SCREEN_WIDTH, NCMD_LINE_HEIGHT, NCMD_COLOR_SELECTED);
-        }
-
-        /* Determine color and text */
-        if (cmd->opcode == -1) {
-            /* START EMULATOR */
-            text_color = NCMD_COLOR_START;
-            snprintf(line, sizeof(line), "  %s", cmd->name);
-        } else if (cmd->opcode == -2) {
-            /* Separator */
-            text_color = NCMD_COLOR_SEPARATOR;
-            snprintf(line, sizeof(line), "%s", cmd->name);
-        } else if (cmd->opcode == -3 || cmd->opcode == -4) {
-            /* Action items (SAVE, RESET) */
-            text_color = NCMD_COLOR_ACTION;
-            snprintf(line, sizeof(line), "  [%s]", cmd->name);
-        } else if (!cmd->implemented) {
-            /* Not implemented - gray with [-] */
-            text_color = NCMD_COLOR_NOTIMPL;
-            snprintf(line, sizeof(line), "[-] %s (dynarec)", cmd->name);
-        } else if (cmd->enabled) {
-            /* Enabled - green with [X] */
-            text_color = NCMD_COLOR_ENABLED;
-            snprintf(line, sizeof(line), "[X] %s", cmd->name);
-        } else {
-            /* Disabled - red with [ ] */
-            text_color = NCMD_COLOR_DISABLED;
-            snprintf(line, sizeof(line), "[ ] %s", cmd->name);
-        }
-
-        DrawText(buffer, NCMD_MENU_X, y, text_color, line);
-        y += NCMD_LINE_HEIGHT;
-    }
-
-    /* Scroll indicators */
-    if (native_cmd_menu_scroll > 0) {
-        DrawText(buffer, SCREEN_WIDTH - 30, NCMD_MENU_Y, NCMD_COLOR_TITLE, "^");
-    }
-    if (end_idx < native_cmd_count) {
-        DrawText(buffer, SCREEN_WIDTH - 30, y - NCMD_LINE_HEIGHT, NCMD_COLOR_TITLE, "v");
-    }
-
-    /* Footer */
-    DrawSeparator(buffer, 10, SCREEN_HEIGHT - 18, SCREEN_WIDTH - 20, NCMD_COLOR_TITLE);
-    DrawText(buffer, 4, SCREEN_HEIGHT - 12, NCMD_COLOR_TITLE, "U/D:1 L/R:Page A:Toggle START:Run");
-}
-
-static void native_cmd_menu_move_selection(int delta) {
-    /* Move selection, skipping separators, with wrap-around */
-    int new_sel = native_cmd_menu_selected;
-    int attempts = 0;
-
-    do {
-        new_sel += delta;
-        /* Wrap around */
-        if (new_sel < 0) new_sel = native_cmd_count - 1;
-        if (new_sel >= native_cmd_count) new_sel = 0;
-        attempts++;
-        /* Stop if we've checked all items (prevent infinite loop) */
-        if (attempts > native_cmd_count) break;
-    } while (native_cmd_list[new_sel].opcode == -2);  /* Skip separators */
-
-    native_cmd_menu_selected = new_sel;
-
-    /* Adjust scroll to keep selection visible */
-    if (native_cmd_menu_selected < native_cmd_menu_scroll) {
-        native_cmd_menu_scroll = native_cmd_menu_selected;
-    }
-    if (native_cmd_menu_selected >= native_cmd_menu_scroll + NCMD_VISIBLE_ITEMS) {
-        native_cmd_menu_scroll = native_cmd_menu_selected - NCMD_VISIBLE_ITEMS + 1;
-    }
-}
-
-static void native_cmd_menu_reset_defaults(void) {
-    /* Reset all implemented commands to enabled */
-    for (int i = 0; i < native_cmd_count; i++) {
-        if (native_cmd_list[i].implemented && native_cmd_list[i].opcode >= 0) {
-            native_cmd_list[i].enabled = 1;
-        }
-    }
-    XLOG("native_cmd: reset to defaults");
-}
-
-static void handle_native_cmd_menu_input(void) {
-    static uint16_t prev_buttons = 0;
-    uint16_t buttons = ~cached_pad1;  /* Invert because cached_pad1 uses active-low */
-    uint16_t pressed = buttons & ~prev_buttons;
-    prev_buttons = buttons;
-
-    /* UP - move 1 position up with wrap */
-    if (pressed & PSX_BTN_UP) {
-        native_cmd_menu_move_selection(-1);
-    }
-
-    /* DOWN - move 1 position down with wrap */
-    if (pressed & PSX_BTN_DOWN) {
-        native_cmd_menu_move_selection(+1);
-    }
-
-    /* LEFT - page up (NCMD_VISIBLE_ITEMS positions) */
-    if (pressed & PSX_BTN_LEFT) {
-        for (int i = 0; i < NCMD_VISIBLE_ITEMS; i++) {
-            native_cmd_menu_move_selection(-1);
-        }
-    }
-
-    /* RIGHT - page down (NCMD_VISIBLE_ITEMS positions) */
-    if (pressed & PSX_BTN_RIGHT) {
-        for (int i = 0; i < NCMD_VISIBLE_ITEMS; i++) {
-            native_cmd_menu_move_selection(+1);
-        }
-    }
-
-    /* A button - toggle, start, save, or reset */
-    if (pressed & PSX_BTN_A) {
-        native_cmd_entry_t* cmd = &native_cmd_list[native_cmd_menu_selected];
-        if (cmd->opcode == -1) {
-            /* START EMULATOR */
-            native_cmd_menu_active = 0;
-            native_cmd_menu_save_config();
-            XLOG("native_cmd: starting emulator");
-        } else if (cmd->opcode == -3) {
-            /* SAVE OPTIONS */
-            native_cmd_menu_save_config();
-            XLOG("native_cmd: options saved");
-        } else if (cmd->opcode == -4) {
-            /* RESET TO DEFAULTS */
-            native_cmd_menu_reset_defaults();
-        } else if (cmd->implemented && cmd->opcode >= 0) {
-            /* Toggle command on/off */
-            cmd->enabled = !cmd->enabled;
-        }
-    }
-
-    /* START button - start emulator (saves automatically) */
-    if (pressed & PSX_BTN_START) {
-        native_cmd_menu_active = 0;
-        native_cmd_menu_save_config();
-        XLOG("native_cmd: starting emulator (START pressed)");
-    }
-
-    /* B button - start without saving */
-    if (pressed & PSX_BTN_B) {
-        native_cmd_menu_active = 0;
-        XLOG("native_cmd: starting emulator (B pressed, no save)");
-    }
-}
+/* v377: ASM SELECT MENU and NATIVE CMD MENU functions REMOVED (dead code, ~600 lines) */
 
 /* ============== CD SWAP FILE BROWSER (v284) ============== */
 
@@ -2470,7 +1721,7 @@ static void draw_cd_browser(uint16_t *buffer) {
 /* ============== SPEED % DISPLAY (v337: was FPS) ============== */
 static void draw_fps_overlay(uint16_t *pixels)
 {
-    if (!fps_show || !pixels || menu_active || native_cmd_menu_active || asm_cmd_menu_active) return;
+    if (!fps_show || !pixels || menu_active) return;  /* v377: native_cmd/asm_cmd checks removed */
 
     int native_fps = Config.PsxType ? 50 : 60;  /* PsxType: 0=NTSC, 1=PAL */
 
@@ -2501,7 +1752,7 @@ static void draw_fps_overlay(uint16_t *pixels)
 /* v295: GPU FPS overlay in TOP-RIGHT corner */
 static void draw_gpu_fps_overlay(uint16_t *pixels)
 {
-    if (!fps_show || !pixels || menu_active || native_cmd_menu_active || asm_cmd_menu_active) return;
+    if (!fps_show || !pixels || menu_active) return;  /* v377: native_cmd/asm_cmd checks removed */
 
     /* v346 FIX: Calculate EFFECTIVE GPU frames per second
      * gpu_fps_current counts video_flip() calls (~50/sec for PAL)
@@ -2518,13 +1769,19 @@ static void draw_gpu_fps_overlay(uint16_t *pixels)
     else if (effective_gpu_fps >= (expected_gpu_fps * 60) / 100) col = FPS_OK;
     else col = FPS_BAD;
 
-    /* Draw in top-right corner (320-26=294) */
-    DrawFBox(pixels, 294, 2, 24, 11, FPS_BG);
+    /* v376: Draw in top-right corner - taller box for 2 lines */
+    DrawFBox(pixels, 282, 2, 36, 21, FPS_BG);
 
-    /* Draw effective GPU FPS number */
-    char buf[8];
+    /* Draw effective GPU FPS number (line 1) */
+    char buf[16];
     snprintf(buf, sizeof(buf), "%2d", effective_gpu_fps);
     DrawText(pixels, 296, 4, col, buf);
+
+    /* v377b: Draw average FPS (40 sec) with 2 decimals */
+    int avg_int = fps_avg_x100 / 100;
+    int avg_dec = fps_avg_x100 % 100;
+    snprintf(buf, sizeof(buf), "~%d.%02d", avg_int, avg_dec);
+    DrawText(pixels, 284, 14, MENU_DIM, buf);
 }
 
 static void update_fps_counter(void)
@@ -2548,12 +1805,21 @@ static void update_fps_counter(void)
         gpu_fps_current = (gpu_frames * 1000) / elapsed;
         gpu_fps_snapshot = gpu_frame_count;
 
+        /* v376: Update average GPU FPS (ring buffer, all integer math) */
+        fps_history[fps_history_idx] = gpu_fps_current;
+        fps_history_idx = (fps_history_idx + 1) % FPS_AVG_SAMPLES;
+        if (fps_history_count < FPS_AVG_SAMPLES) fps_history_count++;
+
+        /* v377b: Calculate average * 100 for 2 decimal precision */
+        int sum = 0;
+        for (int i = 0; i < fps_history_count; i++) sum += fps_history[i];
+        fps_avg_x100 = (sum * 100) / fps_history_count;
+
         fps_last_time = now;
     }
 }
 
-/* Forward declaration for profiler overlay (defined later) */
-static void draw_profiler_overlay(uint16_t *pixels);
+/* v377: draw_profiler_overlay REMOVED (dead code) */
 
 /* ============== VIDEO CALLBACK WRAPPER ============== */
 static void wrapped_video_cb(const void *data, unsigned width, unsigned height, size_t pitch)
@@ -2583,12 +1849,7 @@ static void wrapped_video_cb(const void *data, unsigned width, unsigned height, 
     }
     PROFILE_END(PROF_VIDEO_OUTPUT);
 
-    /* End profiler frame timing AFTER video output */
-    profiler_frame_end();
-    /* v367b: native_mode REMOVED (hardcoded OFF) */
-
-    /* Start timing for next frame */
-    profiler_frame_start();
+    /* v377: profiler REMOVED (dead code) */
 }
 
 /* ============== SPU RESYNC FUNCTION ============== */
@@ -2943,12 +2204,16 @@ static int find_matching_slus_config(char *result_path, int maxlen)
     return 0;
 }
 
-static int write_config_file(const char *path)
+static int write_config_file(const char *path, const char *orig_name)
 {
     FILE *f = fopen(path, "w");
     if (!f) return 0;
 
     fprintf(f, "# QPSX v%s Config\n", QPSX_VERSION);
+    /* v375: Save original game name only for SLUS configs */
+    if (orig_name && orig_name[0]) {
+        fprintf(f, "orig_name = %s\n", orig_name);
+    }
     fprintf(f, "frameskip = %d\n", qpsx_config.frameskip);
     fprintf(f, "target_speed = %d\n", qpsx_config.target_speed);
     fprintf(f, "resampler_type = %d\n", qpsx_config.resampler_type);
@@ -2969,7 +2234,7 @@ static int write_config_file(const char *path)
     fprintf(f, "cycle_multiplier = %d\n", qpsx_config.cycle_mult);
     fprintf(f, "cycle_jump = %d\n", qpsx_config.cycle_jump);  /* v370: Cycle step */
     fprintf(f, "show_fps = %d\n", FLAG_BOOL(qpsx_config.debug_flags, DEBUG_FLAG_SHOW_FPS));
-    fprintf(f, "xa_disable = %d\n", FLAG_BOOL(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE));
+    fprintf(f, "sound_mode = %d\n", qpsx_sound_mode);  /* v392: 0=OFF, 1=ON, 2=TURBO */
     fprintf(f, "cdda_disable = %d\n", FLAG_BOOL(qpsx_config.audio_flags, AUDIO_FLAG_CDDA_DISABLE));
     fprintf(f, "spu_update_freq = %d\n", qpsx_config.spu_update_freq);
     fprintf(f, "spu_reverb = %d\n", qpsx_config.spu_reverb);
@@ -3045,7 +2310,7 @@ static int load_config_file(const char *path)
             else if (strcmp(k, "cycle_multiplier") == 0) qpsx_config.cycle_mult = value;
             else if (strcmp(k, "cycle_jump") == 0) qpsx_config.cycle_jump = value;  /* v370: Cycle step */
             else if (strcmp(k, "show_fps") == 0) FLAG_WRITE(qpsx_config.debug_flags, DEBUG_FLAG_SHOW_FPS, value);
-            else if (strcmp(k, "xa_disable") == 0) FLAG_WRITE(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE, value);
+            else if (strcmp(k, "sound_mode") == 0) qpsx_sound_mode = (value >= 0 && value <= 2) ? value : 1;  /* v392 */
             else if (strcmp(k, "cdda_disable") == 0) FLAG_WRITE(qpsx_config.audio_flags, AUDIO_FLAG_CDDA_DISABLE, value);
             else if (strcmp(k, "spu_update_freq") == 0) qpsx_config.spu_update_freq = value;
             else if (strcmp(k, "spu_reverb") == 0) qpsx_config.spu_reverb = value;
@@ -3129,8 +2394,8 @@ static void qpsx_apply_config(void)
     Config.ForcedXAUpdates = qpsx_config.xa_update_freq;
     Config.SpuIrq = qpsx_config.spu_irq_always;
 
-    /* v353: Audio flags */
-    Config.Xa = FLAG_BOOL(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE);
+    /* v392: Config.Xa always 0 (enabled) - Sound OFF disables entire SPU */
+    Config.Xa = 0;
     /* v367: Config.Cdda synced with qpsx_cdda_mode (OFF/PRETEND=disabled, ON=enabled) */
     Config.Cdda = (qpsx_cdda_mode != 2);  /* 0=OFF, 1=PRETEND -> Cdda=1(disabled); 2=ON -> Cdda=0(enabled) */
 
@@ -3175,6 +2440,8 @@ static void qpsx_apply_config(void)
     /* v338: Resampler type - update global */
     g_resampler_type = qpsx_config.resampler_type;
 
+    /* v392: qpsx_sound_mode is global, no need to sync from flags */
+
     /* v353: CDDA options from flags */
     g_opt_cdda_binsav = FLAG_BOOL(qpsx_config.audio_flags, AUDIO_FLAG_CDDA_BINSAV);
     g_opt_cdda_preload = qpsx_config.cdda_preload;  /* Multi-value */
@@ -3190,120 +2457,7 @@ static void qpsx_apply_config(void)
     remap_rebuild_lut();
 }
 
-/* ============== PROFILER OVERLAY (v108 - FIXED MATH) ============== */
-/* v192: Wall-clock frame timing */
-static unsigned long last_frame_usec = 0;
-static float real_frame_ms_avg = 0;
-
-static void draw_profiler_overlay(uint16_t *pixels)
-{
-    if (!g_profiler.enabled) return;
-
-    /* v192: Measure REAL wall-clock time between frames */
-    struct timeval tv_now;
-    gettimeofday(&tv_now, NULL);
-    unsigned long now_usec = tv_now.tv_sec * 1000000UL + tv_now.tv_usec;
-    float real_frame_ms = 0;
-    if (last_frame_usec > 0) {
-        real_frame_ms = (now_usec - last_frame_usec) / 1000.0f;
-        /* Smoothing: 90% old + 10% new */
-        real_frame_ms_avg = real_frame_ms_avg * 0.9f + real_frame_ms * 0.1f;
-    }
-    last_frame_usec = now_usec;
-
-    const ProfilerData *prof = profiler_get_data();
-    char buf[64];
-    const uint16_t color = 0xFFFF;  /* White */
-    const uint16_t color_yellow = 0xFFE0;  /* Yellow for totals */
-    const uint16_t color_red = 0xF800;  /* Red for hotspots */
-    const uint16_t color_green = 0x07E0;  /* Green for OK */
-    const uint16_t bg_color = 0x0000;  /* Black */
-
-    /* v108: Full profiler with correct Frame sum */
-    int height = g_profiler.detailed ? 150 : 95;
-    DrawFBox(pixels, 2, 16, 175, height, bg_color);
-
-    int y = 18;
-
-    /* v192: REAL wall-clock frame time FIRST */
-    int real_fps = (real_frame_ms_avg > 0.1f) ? (int)(1000.0f / real_frame_ms_avg) : 0;
-    snprintf(buf, sizeof(buf), "REAL:%.1fms %dFPS", real_frame_ms_avg, real_fps);
-    DrawText(pixels, 4, y, (real_fps >= 50) ? color_green : color_red, buf);
-    y += 9;
-
-    /* === Get all component times === */
-    float cpu_total = prof->avg_ms[PROF_CPU_TOTAL];
-    float gte_total = prof->avg_ms[PROF_GTE_TOTAL];
-    float gpu_total = prof->avg_ms[PROF_GPU_TOTAL];
-    float spu_total = prof->avg_ms[PROF_SPU_TOTAL];
-    float cd_total = prof->avg_ms[PROF_CDROM_TOTAL];
-    float video_ms = prof->avg_ms[PROF_VIDEO_OUTPUT];
-
-    /*
-     * v108: Frame = SUM of all components (not separate timer!)
-     * Note: GTE is already included in CPU (called from CPU emulation)
-     * So we don't add GTE separately to avoid double-counting
-     */
-    float frame_ms = cpu_total + gpu_total + spu_total + cd_total + video_ms;
-    if (frame_ms < 0.1f) frame_ms = 0.1f;  /* Avoid div by zero */
-
-    /* Calculate FPS and % of target speed (50 FPS = 20ms) */
-    float fps = 1000.0f / frame_ms;
-    float pct = (20.0f / frame_ms) * 100.0f;  /* 20ms = 50 FPS target */
-
-    /* Profiled components sum */
-    snprintf(buf, sizeof(buf), "Prof:%.1fms (%dFPS %d%%)",
-             frame_ms, (int)fps, (int)pct);
-    DrawText(pixels, 4, y, pct >= 100 ? color_green : color_yellow, buf);
-    y += 9;
-
-    /* === CPU BREAKDOWN === */
-    float mem_r = prof->avg_ms[PROF_CPU_MEM_READ];
-    float mem_w = prof->avg_ms[PROF_CPU_MEM_WRITE];
-    float hw_r = prof->avg_ms[PROF_CPU_HW_READ];
-    float hw_w = prof->avg_ms[PROF_CPU_HW_WRITE];
-    float exc = prof->avg_ms[PROF_CPU_EXCEPTION];
-    float bios = prof->avg_ms[PROF_CPU_BIOS];
-    float comp = prof->avg_ms[PROF_CPU_COMPILE];
-    float known = mem_r + mem_w + hw_r + hw_w + exc + bios + comp;
-    float exec = cpu_total - known;
-    if (exec < 0) exec = 0;
-
-    snprintf(buf, sizeof(buf), "CPU:%.1fms (GTE:%.1f inside)", cpu_total, gte_total);
-    DrawText(pixels, 4, y, color_yellow, buf);
-    y += 8;
-
-    if (g_profiler.detailed) {
-        snprintf(buf, sizeof(buf), " Exec:%.1f Comp:%.2f", exec, comp);
-        DrawText(pixels, 4, y, exec > 15 ? color_red : color, buf);
-        y += 8;
-        snprintf(buf, sizeof(buf), " MemR:%.1f MemW:%.1f", mem_r, mem_w);
-        DrawText(pixels, 4, y, (mem_r + mem_w) > 5 ? color_red : color, buf);
-        y += 8;
-        snprintf(buf, sizeof(buf), " HW:%.2f Exc:%.2f Bio:%.2f", hw_r + hw_w, exc, bios);
-        DrawText(pixels, 4, y, color, buf);
-        y += 8;
-    }
-
-    /* === GPU === */
-    snprintf(buf, sizeof(buf), "GPU:%.1fms", gpu_total);
-    DrawText(pixels, 4, y, color_yellow, buf);
-    y += 8;
-    if (g_profiler.detailed) {
-        snprintf(buf, sizeof(buf), " Poly:%.1f Spr:%.1f",
-                 prof->avg_ms[PROF_GPU_POLY], prof->avg_ms[PROF_GPU_SPRITE]);
-        DrawText(pixels, 4, y, color, buf);
-        y += 8;
-    }
-
-    /* === SPU + CD + CDDA + Video === */
-    float cdda_ms = prof->avg_ms[PROF_CDDA];
-    snprintf(buf, sizeof(buf), "SPU:%.1f CD:%.1f CDDA:%.1f Vid:%.1f",
-             spu_total, cd_total, cdda_ms, video_ms);
-    DrawText(pixels, 4, y, (cdda_ms > 3 || video_ms > 5) ? color_red : color, buf);
-    y += 8;
-    /* v367b: Native Mode statistics REMOVED (hardcoded OFF) */
-}
+/* v377: PROFILER OVERLAY REMOVED (dead code, ~115 lines) */
 
 /* ============== v258: CDDA TOOLS SUBMENU ============== */
 #define CDDA_MENU_X 20
@@ -3787,13 +2941,50 @@ static void draw_menu_overlay(uint16_t *pixels)
     DrawBox(pixels, MENU_X + 1, MENU_Y + 1, MENU_W - 2, MENU_H - 2, MENU_BORDER);
 
     int y = MENU_Y + 5;
-    char buf[48];
+    char buf[128];
+    char cfg_path[256];
 
-    /* QPSX_082: Use QPSX_VERSION instead of hardcoded version */
+    /* v375: Version title */
     snprintf(buf, sizeof(buf), "QPSX v%s", QPSX_VERSION);
     DrawText(pixels, MENU_X + 115, y, MENU_TITLE, buf);
     y += MENU_LINE_H;
-    DrawText(pixels, MENU_X + 55, y, MENU_AUTHOR, "by Grzegorz Korycki @the_q_dev");
+
+    /* v375: Author on separate line */
+    DrawText(pixels, MENU_X + 75, y, MENU_AUTHOR, "by Grzegorz Korycki");
+    y += MENU_LINE_H;
+
+    /* v375: Telegram handle on third line */
+    DrawText(pixels, MENU_X + 70, y, MENU_AUTHOR, "@the_q_dev on telegram");
+    y += MENU_LINE_H + 2;
+
+    /* v375: Config status line - check which configs exist */
+    int has_global = config_exists(QPSX_GLOBAL_CONFIG_PATH);
+    get_slus_config_path(cfg_path, sizeof(cfg_path));
+    int has_slus = (cfg_path[0] && config_exists(cfg_path));
+    get_game_config_path(cfg_path, sizeof(cfg_path));
+    int has_game = config_exists(cfg_path);
+
+    /* Determine which config is loaded (priority: game > slus > global) */
+    /* Loaded config = WHITE, exists = GREEN, missing = DIM */
+    int loaded = has_game ? 3 : (has_slus ? 2 : (has_global ? 1 : 0));
+    uint16_t col_gen = (loaded == 1) ? MENU_FG : (has_global ? MENU_GREEN : MENU_DIM);
+    uint16_t col_slus = (loaded == 2) ? MENU_FG : (has_slus ? MENU_GREEN : MENU_DIM);
+    uint16_t col_game = (loaded == 3) ? MENU_FG : (has_game ? MENU_GREEN : MENU_DIM);
+
+    /* Draw config status: CFG: gen | slus | game (+5 spaces = +30px) */
+    int cfg_x = MENU_X + 50;
+    DrawText(pixels, cfg_x, y, MENU_SEP, "CFG:");
+    cfg_x += 30;
+    DrawText(pixels, cfg_x, y, col_gen, has_global ? "gen" : "no gen");
+    cfg_x += has_global ? 25 : 42;
+    DrawText(pixels, cfg_x, y, MENU_SEP, "|");
+    cfg_x += 10;
+    DrawText(pixels, cfg_x, y, col_slus, has_slus ? "slus" : "no slus");
+    cfg_x += has_slus ? 32 : 48;
+    DrawText(pixels, cfg_x, y, MENU_SEP, "|");
+    cfg_x += 10;
+    DrawText(pixels, cfg_x, y, col_game, has_game ? "game" : "no game");
+
     y += MENU_LINE_H + 2;
     DrawSeparator(pixels, MENU_X + 5, y, MENU_W - 10, MENU_SEP);
     y += 4;
@@ -3856,9 +3047,14 @@ static void draw_menu_overlay(uint16_t *pixels)
             case MI_DEBUG_LOG:
                 snprintf(buf, sizeof(buf), "%s%-12s: %s", sel, mi->name, FLAG_GET(qpsx_config.debug_flags, DEBUG_FLAG_LOG) ? "ON" : "OFF");
                 break;
-            case MI_XA_AUDIO:
-                snprintf(buf, sizeof(buf), "%s%-12s: %s", sel, mi->name, FLAG_GET(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE) ? "OFF" : "ON");
-                col = (!FLAG_GET(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE)) ? ((menu_item == item) ? MENU_SEL : MENU_GREEN) : ((menu_item == item) ? MENU_SEL : MENU_RED);
+            case MI_SOUND:
+                {
+                    const char *sound_mode_str[] = {"OFF", "ON", "TURBO"};
+                    snprintf(buf, sizeof(buf), "%s%-12s: %s", sel, mi->name, sound_mode_str[qpsx_sound_mode % 3]);
+                    if (qpsx_sound_mode == 0) col = (menu_item == item) ? MENU_SEL : MENU_RED;
+                    else if (qpsx_sound_mode == 2) col = (menu_item == item) ? MENU_SEL : MENU_GREEN;
+                    else col = (menu_item == item) ? MENU_SEL : MENU_FG;
+                }
                 break;
             case MI_CDDA_MODE:
                 {
@@ -3923,12 +3119,13 @@ static void draw_menu_overlay(uint16_t *pixels)
             case MI_SAVE_SLUS:
             case MI_SAVE_GLOBAL:
             case MI_DEL_GAME:
+            case MI_DEL_SLUS:
             case MI_DEL_GLOBAL:
             case MI_EXIT:
                 snprintf(buf, sizeof(buf), "%s[%s]", sel, mi->name);
                 if (menu_item == item) col = MENU_SEL;
                 else if (item == MI_SAVE_GAME || item == MI_SAVE_SLUS || item == MI_SAVE_GLOBAL) col = MENU_GREEN;
-                else if (item == MI_DEL_GAME || item == MI_DEL_GLOBAL) col = MENU_RED;
+                else if (item == MI_DEL_GAME || item == MI_DEL_SLUS || item == MI_DEL_GLOBAL) col = MENU_RED;
                 else col = MENU_TITLE;
                 marker = "";
                 break;
@@ -4053,7 +3250,7 @@ static void handle_menu_input(void)
                 case MI_SHOW_FPS: FLAG_TOGGLE(qpsx_config.debug_flags, DEBUG_FLAG_SHOW_FPS); break;
                 case MI_PLAYER2: FLAG_TOGGLE(qpsx_config.input_flags, INPUT_FLAG_PLAYER2); break;
                 case MI_DEBUG_LOG: FLAG_TOGGLE(qpsx_config.debug_flags, DEBUG_FLAG_LOG); break;
-                case MI_XA_AUDIO: FLAG_TOGGLE(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE); break;
+                case MI_SOUND: qpsx_sound_mode = (qpsx_sound_mode > 0) ? qpsx_sound_mode - 1 : 2; break;
                 case MI_CDDA_MODE: qpsx_cdda_mode = (qpsx_cdda_mode > 0) ? qpsx_cdda_mode - 1 : 2; break;
                 case MI_CDDA_PRELOAD: qpsx_config.cdda_preload = (qpsx_config.cdda_preload > 0) ? qpsx_config.cdda_preload - 1 : 3; break;
                 /* v369: MI_PIXEL_SIZE removed */
@@ -4098,7 +3295,7 @@ static void handle_menu_input(void)
                 case MI_SHOW_FPS: FLAG_TOGGLE(qpsx_config.debug_flags, DEBUG_FLAG_SHOW_FPS); break;
                 case MI_PLAYER2: FLAG_TOGGLE(qpsx_config.input_flags, INPUT_FLAG_PLAYER2); break;
                 case MI_DEBUG_LOG: FLAG_TOGGLE(qpsx_config.debug_flags, DEBUG_FLAG_LOG); break;
-                case MI_XA_AUDIO: FLAG_TOGGLE(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE); break;
+                case MI_SOUND: qpsx_sound_mode = (qpsx_sound_mode < 2) ? qpsx_sound_mode + 1 : 0; break;
                 case MI_CDDA_MODE: qpsx_cdda_mode = (qpsx_cdda_mode < 2) ? qpsx_cdda_mode + 1 : 0; break;
                 case MI_CDDA_PRELOAD: qpsx_config.cdda_preload = (qpsx_config.cdda_preload < 3) ? qpsx_config.cdda_preload + 1 : 0; break;
                 /* v369: MI_PIXEL_SIZE removed */
@@ -4157,23 +3354,30 @@ static void handle_menu_input(void)
                 break;
             case MI_SAVE_GAME:
                 get_game_config_path(path, sizeof(path));
-                set_feedback(write_config_file(path) ? "Game config saved!" : "Save FAILED!");
+                set_feedback(write_config_file(path, NULL) ? "Game config saved!" : "Save FAILED!");
                 break;
             case MI_SAVE_SLUS:
                 get_slus_config_path(path, sizeof(path));
                 if (path[0] != '\0') {
-                    set_feedback(write_config_file(path) ? "SLUS config saved!" : "Save FAILED!");
+                    char game_name[128];
+                    get_game_name(game_name, sizeof(game_name));
+                    set_feedback(write_config_file(path, game_name) ? "SLUS config saved!" : "Save FAILED!");
                 } else {
                     set_feedback("No SLUS/SCES ID!");
                 }
                 break;
             case MI_SAVE_GLOBAL:
-                set_feedback(write_config_file(QPSX_GLOBAL_CONFIG_PATH) ? "Global config saved!" : "Save FAILED!");
+                set_feedback(write_config_file(QPSX_GLOBAL_CONFIG_PATH, NULL) ? "Global config saved!" : "Save FAILED!");
                 break;
             case MI_DEL_GAME:
                 get_game_config_path(path, sizeof(path));
                 if (config_exists(path)) { delete_config_file(path); set_feedback("Game config deleted!"); }
                 else set_feedback("No game config found");
+                break;
+            case MI_DEL_SLUS:
+                get_slus_config_path(path, sizeof(path));
+                if (path[0] && config_exists(path)) { delete_config_file(path); set_feedback("SLUS config deleted!"); }
+                else set_feedback("No SLUS config found");
                 break;
             case MI_DEL_GLOBAL:
                 if (config_exists(QPSX_GLOBAL_CONFIG_PATH)) { delete_config_file(QPSX_GLOBAL_CONFIG_PATH); set_feedback("Global config deleted!"); }
@@ -4257,7 +3461,7 @@ static void qpsx_load_config(void)
     }
 
     XLOG("v340: No config found, using defaults");
-    write_config_file(QPSX_GLOBAL_CONFIG_PATH);
+    write_config_file(QPSX_GLOBAL_CONFIG_PATH, NULL);
 }
 
 /* ============== LIBRETRO API ============== */
@@ -4310,8 +3514,13 @@ void retro_init(void)
     fps_frame_count = 0;
     fps_current = 0;
 
-    /* v092: Initialize profiler */
-    profiler_init();
+    /* v377b: Reset average FPS tracking */
+    fps_history_idx = 0;
+    fps_history_count = 0;
+    fps_avg_x100 = 0;
+    for (int i = 0; i < FPS_AVG_SAMPLES; i++) fps_history[i] = 0;
+
+    /* v377: profiler REMOVED (dead code) */
 
     video_clear();
     XLOG("=== retro_init() DONE ===");
@@ -4320,8 +3529,7 @@ void retro_init(void)
 void retro_deinit(void)
 {
     XLOG("=== retro_deinit() ===");
-    /* v343: Remove crash marker on normal exit */
-    safe_mode_remove_marker();
+    /* v377: safe_mode REMOVED */
     if (psx_initted) {
         psxShutdown();
         ReleasePlugins();
@@ -4362,27 +3570,19 @@ void retro_run(void)
     if (run_frame_count == 0) {
         XLOG("retro_run() frame 0");
 
-        /* v244: Initialize native command menu */
-        native_cmd_menu_init();
-        native_cmd_menu_load_config();
-
-        /* v285: Initialize ASM Select menu */
-        asm_cmd_init();
-        asm_cmd_menu_load_config();  /* v288: Load saved ASM toggles */
-
-        /* v320: Safe mode - check for crash on previous run */
-        /* v340: Fixed bug - marker was never removed after safe mode triggered */
-        if (safe_mode_check_marker()) {
-            XLOG("v340: SAFE MODE - previous run crashed! Opening main config menu.");
-            safe_mode_triggered = 1;
-            menu_active = 1;
-            menu_first_frame = 1;
+        /* v377: Initialize native command list (for runtime opcode check) */
+        native_cmd_count = 0;
+        for (int i = 0; i < NCMD_MAX && native_cmd_list[i].name != NULL; i++) {
+            native_cmd_count++;
         }
-        /* v340: Always write marker - if we crash before 3.5s stability, next run triggers safe mode */
-        safe_mode_write_marker();
-        XLOG("v340: Wrote crash marker (will remove after 3.5s stable)");
+        native_cmd_update_any_enabled();
 
-        /* v367b: Native command menus REMOVED - g_opt_native_mode always 0 */
+        /* v377: Auto-open main menu at startup (unconditional) */
+        XLOG("v377: Opening main config menu at startup");
+        menu_active = 1;
+        menu_first_frame = 1;
+
+        /* v377: Safe mode, native_cmd_menu, asm_cmd_menu REMOVED (dead code) */
 
         /*
          * QPSX_081 FIX: SPU desync at startup
@@ -4396,13 +3596,7 @@ void retro_run(void)
     run_frame_count++;
     input_debug_counter++;
 
-    /* v340: Safe mode - remove crash marker after stable running */
-    /* v343: Use >= instead of == to ensure removal even if skipped */
-    safe_mode_frames++;
-    if (safe_mode_frames >= SAFE_MODE_FRAMES && safe_mode_frames < SAFE_MODE_FRAMES + 5) {
-        safe_mode_remove_marker();
-        XLOG("v343: Removed crash marker - emulation stable after 3.5s");
-    }
+    /* v377: Safe mode REMOVED */
 
     update_fps_counter();
 
@@ -4584,7 +3778,7 @@ bool retro_load_game(const struct retro_game_info *info)
 
     memset(&Config, 0, sizeof(Config));
 
-    Config.Xa = FLAG_BOOL(qpsx_config.audio_flags, AUDIO_FLAG_XA_DISABLE);
+    Config.Xa = 0;  /* v392: always enabled - Sound OFF disables entire SPU */
     /* v367: Config.Cdda synced with qpsx_cdda_mode */
     Config.Cdda = (qpsx_cdda_mode != 2);  /* OFF/PRETEND=disabled, ON=enabled */
     Config.Mdec = 0;
@@ -4602,8 +3796,8 @@ bool retro_load_game(const struct retro_game_info *info)
     snprintf(Config.Bios, sizeof(Config.Bios), "%s", qpsx_config.bios_file);
     XLOG("BIOS: %s/%s", Config.BiosDir, Config.Bios);
 
-    snprintf(Config.Mcd1, sizeof(Config.Mcd1), "/mnt/sda1/cores/config/pcsx4all_mcd1.mcd");
-    snprintf(Config.Mcd2, sizeof(Config.Mcd2), "/mnt/sda1/cores/config/pcsx4all_mcd2.mcd");
+    snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/pcsx4all_mcd1.mcd", retro_save_directory);
+    snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/pcsx4all_mcd2.mcd", retro_save_directory);
 
     if (psxInit() == -1) {
         XLOG("ERROR: psxInit() failed!");

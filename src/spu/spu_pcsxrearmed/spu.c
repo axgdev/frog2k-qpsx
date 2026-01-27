@@ -32,6 +32,9 @@
 #include "spu_config.h"
 #include "profiler.h"   /* v092: Profiler support */
 
+/* v392: Sound mode from libretro-core.cpp: 0=OFF, 1=ON, 2=TURBO */
+extern int qpsx_sound_mode;
+
 /* v367b: CDDA speedup options HARDCODED ON */
 #define g_opt_cdda_fast_mix   1
 #define g_opt_cdda_unity_vol  1
@@ -80,7 +83,7 @@ static int iFMod[NSSIZE];
 static int RVB[NSSIZE * 2];
 int ChanBuf[NSSIZE];
 
-#define CDDA_BUFFER_SIZE (16384 * sizeof(uint32_t)) // must be power of 2
+#define CDDA_BUFFER_SIZE (4096 * sizeof(uint32_t)) // must be power of 2
 
 ////////////////////////////////////////////////////////////////////////
 // CODE AREA
@@ -1267,6 +1270,16 @@ void schedule_next_irq(void)
 
 void CALLBACK SPUasync(unsigned int cycle, unsigned int flags)
 {
+ /* v392: SOUND OFF mode - skip all SPU processing, send silence for timing */
+ if (qpsx_sound_mode == 0) {
+  if (flags & 1) {
+   /* Send silence (735 samples = NTSC frame) to maintain frontend timing */
+   static int16_t silence[735 * 2] = {0};
+   out_current->feed(silence, 735 * 4);
+  }
+  return;
+ }
+
  do_samples(cycle, spu_config.iUseFixedUpdates);
 
  if (spu.spuCtrl & CTRL_IRQ)
@@ -1324,7 +1337,7 @@ void ClearWorkingState(void)
 // SETUPSTREAMS: init most of the spu buffers
 static void SetupStreams(void)
 { 
- spu.pSpuBuffer = (unsigned char *)malloc(32768);      // alloc mixing buffer
+ spu.pSpuBuffer = (unsigned char *)malloc(8192);       // alloc mixing buffer, reduced for L1 cache
  spu.SSumLR = calloc(NSSIZE * 2, sizeof(spu.SSumLR[0]));
 
  spu.XAStart =                                         // alloc xa buffer

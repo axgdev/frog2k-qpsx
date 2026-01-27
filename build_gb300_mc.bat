@@ -2,19 +2,18 @@
 setlocal enabledelayedexpansion
 
 REM ========================================
-REM QPSX SF2000 Build Script (Multicore Official)
-REM Uses: C:\Temp\sf2000_multicore_official
-REM This is the default build script - same as build_sf2000_mc.bat
+REM QPSX GB300 Build Script (Multicore Official)
+REM Uses: C:\Temp\gb300_multicore
 REM ========================================
 
 for %%I in (.) do set FOLDER_NAME=%%~nxI
 
 echo ========================================
-echo Building %FOLDER_NAME% - PSX Emulator for SF2000
-echo Using sf2000_multicore_official
+echo Building %FOLDER_NAME% - PSX Emulator for GB300
+echo Using gb300_multicore
 echo ========================================
 
-set MULTICORE_DIR=C:\Temp\sf2000_multicore_official
+set MULTICORE_DIR=C:\Temp\gb300_multicore
 set QPSX_DIR=%~dp0
 set CORE_NAME=%FOLDER_NAME%
 
@@ -51,8 +50,8 @@ if not exist "%QPSX_DIR%pcsx4all_libretro_sf2000.a" (
 )
 
 echo.
-echo [3/5] Setting up multicore framework...
-wsl -e bash -c "mkdir -p /mnt/c/Temp/sf2000_multicore_official/cores/%CORE_NAME%"
+echo [3/5] Setting up GB300 multicore framework...
+wsl -e bash -c "mkdir -p /mnt/c/Temp/gb300_multicore/cores/%CORE_NAME%"
 
 REM Create the core Makefile
 echo TARGET_NAME := pcsx4all> "%MULTICORE_DIR%\cores\%CORE_NAME%\Makefile"
@@ -75,8 +74,8 @@ REM Copy the .a file
 copy /Y "%QPSX_DIR%pcsx4all_libretro_sf2000.a" "%MULTICORE_DIR%\cores\%CORE_NAME%\"
 
 echo.
-echo [4/5] Linking core_87000000...
-wsl -e bash -c "cd /mnt/c/Temp/sf2000_multicore_official && rm -f core_87000000 core.elf libretro_core.a 2>/dev/null; export PATH=/tmp/mips32-mti-elf/2019.09-03-2/bin:$PATH && make CORE=cores/%CORE_NAME% CONSOLE=psx core_87000000"
+echo [4/5] Linking core_87000000 for GB300...
+wsl -e bash -c "cd /mnt/c/Temp/gb300_multicore && rm -f core_87000000 core.elf libretro_core.a 2>/dev/null; export PATH=/tmp/mips32-mti-elf/2019.09-03-2/bin:$PATH && make CORE=cores/%CORE_NAME% CONSOLE=psx core_87000000"
 
 if %errorlevel% neq 0 (
     echo.
@@ -98,12 +97,12 @@ copy /Y "%MULTICORE_DIR%\core_87000000" "%QPSX_DIR%core_87000000"
 
 echo.
 echo ========================================
-echo BUILD SUCCESSFUL! (SF2000)
+echo BUILD SUCCESSFUL! (GB300)
 echo ========================================
 echo.
 echo Output: %QPSX_DIR%core_87000000
 for %%A in ("%QPSX_DIR%core_87000000") do echo Size: %%~zA bytes
 echo.
-echo To deploy: copy core_87000000 to SD:\cores\psx\
+echo To deploy: copy core_87000000 to SD:\cores\psx\ on GB300
 echo.
 pause
