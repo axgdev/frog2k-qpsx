@@ -6,6 +6,12 @@ Based on PCSX4ALL with MIPS-to-MIPS dynamic recompiler, ported to the SF2000/GB3
 
 **Current Version: v374** - Significant performance improvements over previous releases.
 
+## Changelog v393
+
+### Minor Performance Improvements
+- **~5-10% faster** than previous public release - added few ASM/buffor optimizations
+- Added Sound OFF, ON and TURBO options. 
+
 ## Changelog v374
 
 ### Major Performance Improvements
@@ -14,7 +20,7 @@ Based on PCSX4ALL with MIPS-to-MIPS dynamic recompiler, ported to the SF2000/GB3
 - Cleaner audio callback with zero unnecessary overhead
 
 ### New Features
-- **Slow Motion Mode** - adjustable target speed (40-100%) for difficult game sections
+- **Slow Motion Mode** - adjustable target speed (40-100%) to slow down games without audio stuttering
 - **Joypad Remapping** - full button remapping support for games requiring L2/R2 (Abe's Oddysee, racing games, etc.)
 - **CDDA Pretend Mode** - keeps games running that require CD audio detection without actual audio playback
 - **Player 2 Support** - optional second controller input
