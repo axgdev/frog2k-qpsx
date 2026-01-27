@@ -682,7 +682,7 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
     audio_batch_cb(buf, samples);
 }
 
-#define QPSX_VERSION "395"
+#define QPSX_VERSION "396"
 #define QPSX_GLOBAL_CONFIG_PATH "/mnt/sda1/cores/config/pcsx4all.cfg"
 #define QPSX_NATIVE_CONFIG_PATH "/mnt/sda1/cores/config/psx_native.cfg"
 #define QPSX_ASM_CONFIG_PATH "/mnt/sda1/cores/config/psx_asm.cfg"
@@ -769,6 +769,17 @@ static int fb_scroll = 0;
 extern "C" int fs_opendir(const char *path);
 extern "C" int fs_readdir(int fd, void *buf);
 extern "C" int fs_closedir(int fd);
+extern "C" int fs_mkdir(const char *path, int mode);  /* v396: Create directory */
+
+/* v396: Check if file exists (using fopen - works on SF2000) */
+static int file_exists(const char* path) {
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        fclose(f);
+        return 1;
+    }
+    return 0;
+}
 
 /* CD-ROM functions for disc swap - declared in plugins.h and cdrom.h */
 extern char CdromId[10];
@@ -1323,7 +1334,7 @@ enum {
  * GPU options (except Pixel Size), SMC Check, Dynarec options = HARDCODED
  */
 static const MenuItem menu_items[MENU_ITEMS] = {
-    {"--- QPSX v395 ---",   1, 0},
+    {"--- QPSX v396 ---",   1, 0},
     {">> SWAP CD <<",       2, 0},
     {"Frameskip",           0, 0},
     {"Target Speed",        0, 1},
@@ -3838,8 +3849,42 @@ bool retro_load_game(const struct retro_game_info *info)
     snprintf(Config.Bios, sizeof(Config.Bios), "%s", qpsx_config.bios_file);
     XLOG("BIOS: %s/%s", Config.BiosDir, Config.Bios);
 
-    snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/pcsx4all_mcd1.mcd", retro_save_directory);
-    snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/pcsx4all_mcd2.mcd", retro_save_directory);
+    /* v396: Per-game memory cards in /mnt/sda1/ROMS/SAVE/PSX/
+     *
+     * Algorithm:
+     * 1. Extract game name from path (e.g., "Tekken 3" from "/mnt/sda1/ROMS/qpsx/Tekken 3.cue")
+     * 2. Build per-game path: /mnt/sda1/ROMS/SAVE/PSX/Tekken 3.mcd
+     * 3. Create PSX directory if it doesn't exist
+     * 4. If per-game .mcd exists -> use it
+     * 5. If not -> path is set, but file will be created on first save (on-demand in sio.cpp)
+     *
+     * Note: Old shared memory cards in /mnt/sda1/cores/config/ are abandoned.
+     *       No migration - each game starts fresh with per-game saves.
+     */
+    {
+        static const char* PSX_SAVE_DIR = "/mnt/sda1/ROMS/SAVE/PSX";
+        char game_name_buf[256];
+
+        /* Get game name from loaded game path */
+        get_game_name(game_name_buf, sizeof(game_name_buf));
+        XLOG("v396: Game name for memcard: %s", game_name_buf);
+
+        /* Create save directories if they don't exist */
+        fs_mkdir("/mnt/sda1/ROMS/SAVE", 0755);
+        fs_mkdir(PSX_SAVE_DIR, 0755);
+
+        /* Build per-game memory card path */
+        snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/%s.mcd", PSX_SAVE_DIR, game_name_buf);
+
+        /* MCD2 (slot 2) - rarely used, keep as shared card or empty */
+        snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/shared_mcd2.mcd", PSX_SAVE_DIR);
+
+        if (file_exists(Config.Mcd1)) {
+            XLOG("v396: Per-game memcard EXISTS: %s", Config.Mcd1);
+        } else {
+            XLOG("v396: Per-game memcard will be created on first save: %s", Config.Mcd1);
+        }
+    }
 
     if (psxInit() == -1) {
         XLOG("ERROR: psxInit() failed!");

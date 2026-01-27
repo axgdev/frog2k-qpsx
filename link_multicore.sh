@@ -31,7 +31,7 @@ ${MIPS}gcc $CFLAGS -o debug.o -c ${MULTICORE}/debug.c
 ${MIPS}gcc $CFLAGS -o video_sf2000.o -c ${MULTICORE}/video_sf2000.c
 
 echo "Preparing libraries..."
-cp _libretro_sf2000.a libretro_core.a
+cp pcsx4all_libretro_sf2000.a libretro_core.a
 
 echo "Linking core.elf with ${CORE_LD}..."
 ${MIPS}g++ -Wl,-Map=core.elf.map -EL -march=mips32 -mtune=mips32 -msoft-float \

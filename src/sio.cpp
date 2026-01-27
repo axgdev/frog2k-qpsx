@@ -455,7 +455,8 @@ struct Memcard {
 	Memcard() :
 		filename(NULL),
 		file(NULL),
-		cur_offset(0)
+		cur_offset(0),
+		file_exists(false)  /* v396: track if file exists on disk */
 	{}
 
 	~Memcard()
@@ -472,6 +473,7 @@ struct Memcard {
 	FILE* file;           // File ptr is non-NULL when card is being written to
 	long  cur_offset;     // Current file offset (when file is open for writing)
 	char  data[MCD_SIZE];
+	bool  file_exists;    // v396: true if .mcd file exists on disk (for on-demand creation)
 };
 
 static Memcard memcards[2];
@@ -765,21 +767,17 @@ int LoadMcd(enum MemcardNum mcd_num, char* filename)
 
 	SIO_LOG("LoadMcd: trying to open %s", mc.filename);
 	if ((f = fopen(mc.filename, "rb")) == NULL) {
-		SIO_LOG("LoadMcd: file not found, creating...");
-		printf("The memory card %s doesn't exist - creating it\n", mc.filename);
-		if (CreateMcd(mc.filename, false)) {
-			SIO_LOG("LoadMcd: CreateMcd FAILED!");
-			printf("Error in %s(): Creating memcard file failed.\n", __func__);
-			printf("Maybe file already exists and file/folder lacks permissions?\n");
-			printf("Memcard slot %d is now empty.\n", mcd_num+1);
-			mc.filename = NULL;
-			return -1;
-		}
-		SIO_LOG("LoadMcd: CreateMcd OK, reopening for read");
-		if ((f = fopen(mc.filename, "rb")) == NULL)
-			goto error;
+		/* v396: Don't create file immediately - defer until first write (on-demand creation)
+		 * This avoids creating empty .mcd files for games that don't use memory cards.
+		 * Initialize with formatted/empty card data so game sees a blank card. */
+		SIO_LOG("LoadMcd: file not found, deferring creation until first save");
+		printf("Memory card %s doesn't exist yet - will create on first save\n", mc.filename);
+		InitMcdData(memcards[mcd_num].data);
+		mc.file_exists = false;
+		return 0;
 	}
 
+	mc.file_exists = true;  /* v396: file exists on disk */
 	SIO_LOG("LoadMcd: file opened OK, loading...");
 	printf("Loading memory card %s\n", mc.filename);
 
@@ -865,6 +863,18 @@ int SaveMcd(enum MemcardNum mcd_num, uint32_t adr, int size)
 		if (mc.filename == NULL || *mc.filename == '\0')
 			return 0;
 		mc.cur_offset = 0;
+
+		/* v396: On-demand creation - create file on first write if it doesn't exist */
+		if (!mc.file_exists) {
+			SIO_LOG("SaveMcd: creating file on first write: %s", mc.filename);
+			printf("Creating memory card on first save: %s\n", mc.filename);
+			if (CreateMcd(mc.filename, false) != 0) {
+				SIO_LOG("SaveMcd: CreateMcd FAILED!");
+				goto error;
+			}
+			mc.file_exists = true;
+		}
+
 		if ((mc.file = fopen(mc.filename, "r+b")) == NULL)
 			goto error;
 	}

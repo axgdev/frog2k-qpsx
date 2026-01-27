@@ -30,7 +30,7 @@ echo Multicore: %MULTICORE_DIR%
 
 echo.
 echo [1/6] Cleaning previous build...
-wsl -e bash -c "cd '%WSL_QPSX_PATH%' && find . -name '*.o' -delete 2>/dev/null; rm -f _libretro_sf2000.a core_87000000 2>/dev/null; true"
+wsl -e bash -c "cd '%WSL_QPSX_PATH%' && find . -name '*.o' -delete 2>/dev/null; rm -f pcsx4all_libretro_sf2000.a core_87000000 2>/dev/null; true"
 
 echo.
 echo [2/6] Compiling QPSX library...
@@ -43,9 +43,9 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-if not exist "%QPSX_DIR%_libretro_sf2000.a" (
+if not exist "%QPSX_DIR%pcsx4all_libretro_sf2000.a" (
     echo.
-    echo *** ERROR: _libretro_sf2000.a not created! ***
+    echo *** ERROR: pcsx4all_libretro_sf2000.a not created! ***
     pause
     exit /b 1
 )
