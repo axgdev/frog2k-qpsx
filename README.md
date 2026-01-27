@@ -6,6 +6,11 @@ Based on PCSX4ALL with MIPS-to-MIPS dynamic recompiler, ported to the SF2000/GB3
 
 **Current Version: v374** - Significant performance improvements over previous releases.
 
+## Changelog v395
+
+### Fixed CDDA buffer overflow (Causing exceptions) 
+- Now games that were using CDDA with CDDA ON will not crash anymore (Rayman, Tomb Raider II, etc.)
+
 ## Changelog v393
 
 ### Minor Performance Improvements
