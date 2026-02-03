@@ -46,6 +46,7 @@ Based on PCSX4ALL with MIPS-to-MIPS dynamic recompiler, ported to the SF2000/GB3
 |----------|------|
 | SF2000 | `releases/sf2000/core_87000000` |
 | GB300 | `releases/gb300/core_87000000` |
+(Now also FrogUI versions included)
 
 ## Installation
 
