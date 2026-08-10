@@ -76,13 +76,26 @@ extern "C" void xlog(const char *fmt, ...);
 #define USE_DIRECT_FASTPATH_BLOCK_RETURN_JUMPS
 
 /* Const propagation is applied to addresses */
+#if defined(QPSX_ENABLE_MIPS_CONST_MEM) && QPSX_ENABLE_MIPS_CONST_MEM
 #define USE_CONST_ADDRESSES
+#endif
 
 /* Const propagation is extended to optimize 'fuzzy' non-const addresses */
+#if defined(QPSX_ENABLE_MIPS_CONST_MEM) && QPSX_ENABLE_MIPS_CONST_MEM
 #define USE_CONST_FUZZY_ADDRESSES
+#endif
 
-/* Generate inline memory access or call psxMemRead/Write C functions */
+/*
+ * Generate inline memory access or call psxMemRead/Write C functions.
+ *
+ * Dynamic accesses perform a runtime PSX-range check and convert through the
+ * malloc-backed psxM pointer when no virtual mapping is available.  Keep this
+ * fast path explicit because constant-address emission has the separate,
+ * stricter requirement that psxM remain allocated at one address.
+ */
+#if defined(QPSX_ENABLE_MIPS_DIRECT_MEM) && QPSX_ENABLE_MIPS_DIRECT_MEM
 #define USE_DIRECT_MEM_ACCESS
+#endif
 
 /* Virtual memory mapping options: */
 #if defined(SHMEM_MIRRORING) || defined(TMPFS_MIRRORING)

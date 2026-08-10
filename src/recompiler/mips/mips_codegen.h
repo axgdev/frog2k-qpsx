@@ -349,7 +349,8 @@ do {                                                                           \
 	lsu_tmp_cache_valid = false;                                               \
     host_v0_reg_is_const = false;                                              \
     host_ra_reg_has_block_retaddr = false;                                     \
-    write32(0x0c000000 | (((u32)(addr) & 0x0fffffff) >> 2));                   \
+    LI32(MIPSREG_T9, (u32)(addr));                                              \
+    write32(0x0000f809 | (MIPSREG_T9 << 21));                                  \
 } while (0)
 
 #define JR(rs) \

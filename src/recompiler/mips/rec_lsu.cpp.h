@@ -75,7 +75,9 @@
 #endif
 
 /* Cache values in host regs in load/store emitters. */
+#if defined(QPSX_ENABLE_MIPS_LSU_CACHING) && QPSX_ENABLE_MIPS_LSU_CACHING
 #define USE_LSU_CACHING
+#endif
 
 
 #define LSU_OPCODE(insn, rt, rn, imm) \
