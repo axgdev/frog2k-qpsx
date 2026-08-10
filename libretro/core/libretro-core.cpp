@@ -3649,6 +3649,9 @@ void retro_run(void)
     }
     run_frame_count++;
     input_debug_counter++;
+    if (g_debug_log_enabled && (run_frame_count % 60 == 0)) {
+        XLOG("retro_run progress: frame %d", run_frame_count);
+    }
 
     /* v377: Safe mode REMOVED */
 
