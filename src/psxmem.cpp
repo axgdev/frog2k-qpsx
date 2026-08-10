@@ -111,7 +111,11 @@ bool psxH_allocated;
  */
 #define QPSX_FIXED_PSXM_ADDR    0x85000000
 #define QPSX_FIXED_PSXM_SIZE    0x200000    /* 2MB PSX RAM */
-#define QPSX_USE_FIXED_ADDR     1           /* 1=use fixed, 0=use malloc */
+#if defined(QPSX_LINUX_ALLOCATED_RAM)
+#define QPSX_USE_FIXED_ADDR     0           /* Linux must own every RAM page */
+#else
+#define QPSX_USE_FIXED_ADDR     1           /* firmware-owned physical map */
+#endif
 
 /* Track if we're using fixed address (to prevent free() on fixed addr) */
 static bool psxM_is_fixed_addr = false;
