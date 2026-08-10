@@ -399,15 +399,26 @@ do { \
 
 #include "opcodes.h"
 
-#if !defined(HAVE_MIPS32R2_CACHE_OPS) && !defined(SF2000)
+#if defined(QPSX_LINUX_CACHEFLUSH) || \
+	(!defined(HAVE_MIPS32R2_CACHE_OPS) && !defined(SF2000))
 #include <sys/cachectl.h>
 #endif
 
 static inline void clear_insn_cache(void *start, void *end, int flags)
 {
-#ifdef HAVE_MIPS32R2_CACHE_OPS
+#if defined(HAVE_MIPS32R2_CACHE_OPS) && !defined(QPSX_LINUX_CACHEFLUSH)
 	// MIPS32r2 added fine-grained usermode cache flush ability (yes, please!)
 	MIPS32R2_MakeCodeVisible(start, (char *)end - (char *)start);
+#elif defined(SF2000) && defined(QPSX_LINUX_CACHEFLUSH)
+	int length = (int)((char *)end - (char *)start);
+
+	if (length > 0 && cacheflush(start, length, BCACHE) != 0) {
+		static unsigned cache_flush_failures;
+
+		if (cache_flush_failures++ == 0)
+			printf("QPSX cacheflush failed start=%p length=%d\n",
+				start, length);
+	}
 #elif defined(SF2000)
 	// SF2000 bare metal: use GCC builtin which calls _flush_cache() provided
 	// by the multicore framework. This uses MIPS cache instructions directly
