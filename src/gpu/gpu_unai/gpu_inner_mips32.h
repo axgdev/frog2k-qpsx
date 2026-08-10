@@ -22,7 +22,8 @@
  * When disabled, falls back to C implementations.
  */
 
-#if defined(SF2000) || defined(__mips__)
+#if (defined(SF2000) || defined(__mips__)) && \
+    !defined(QPSX_DISABLE_MIPS32R2_GPU_ASM)
 
 #ifdef __cplusplus
 extern "C" {
