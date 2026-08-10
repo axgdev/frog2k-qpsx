@@ -1037,6 +1037,7 @@ static unsigned long get_time_ms(void)
 /* ============== MENU STATE ============== */
 static int menu_active = 0;
 static int menu_was_active = 0;
+static int menu_was_manually_closed = 0;  /* QPSX_085: set when user closes menu with X/START */
 static int menu_item = 0;
 static int menu_scroll = 0;
 static int menu_first_frame = 0;
@@ -3231,6 +3232,9 @@ static void handle_menu_input(void)
 
     /* v343: Close menu with X or START (B now decreases option values) */
     if ((cur_x && !prev_x) || (cur_start && !prev_start)) {
+        /* QPSX_085: remember the user closed the menu themselves so the
+         * frame-250 auto-menu knows config was already applied. */
+        menu_was_manually_closed = 1;
         menu_active = 0;
         menu_first_frame = 1;
         start_hold_frames = 0;
@@ -3669,7 +3673,12 @@ void retro_run(void)
      * At frame 250 (~5 sec at 50fps): Open menu invisibly for 3 frames
      * Frame 253: Auto-close with qpsx_apply_config() call
      */
-    if (run_frame_count == 250 && !menu_active && auto_menu_frames == 0) {
+    /* QPSX_085: only run the invisible auto-menu when the user never closed
+     * the menu themselves (menu_at_start=OFF flow).  When the user closes the
+     * menu with X/START, qpsx_apply_config() already ran on close; running it
+     * again at frame 250 while the game is rendering stalls the device. */
+    if (run_frame_count == 250 && !menu_active && auto_menu_frames == 0 &&
+        !menu_was_manually_closed) {
         XLOG("QPSX_084: AUTO-OPENING INVISIBLE MENU");
         auto_menu_frames = 3;  /* Just 3 frames - menu is invisible anyway */
         menu_active = 1;
@@ -3808,6 +3817,10 @@ void retro_run(void)
 bool retro_load_game(const struct retro_game_info *info)
 {
     XLOG("=== retro_load_game() ===");
+
+    /* QPSX_085: this state belongs to one loaded game, not the core process.
+     * A reused core must be eligible for the compatibility pass again. */
+    menu_was_manually_closed = 0;
 
     /* v395: Load startup config first (before game config) */
     load_startup_config();
