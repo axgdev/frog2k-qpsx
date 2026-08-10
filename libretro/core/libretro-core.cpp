@@ -691,6 +691,7 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
 
 /* v395: Global startup option - whether to open menu at startup */
 static int g_menu_at_start = 1;  /* default: show menu at start */
+static int g_auto_menu = 1;      /* default: run frame-250 compatibility pass */
 
 /* ============== v353: BITFLAGS FOR BOOLEAN OPTIONS ============== */
 /* Pack ON/OFF options into bytes instead of ints: 8 options = 1 byte vs 32 bytes
@@ -2410,6 +2411,8 @@ static void load_startup_config(void)
         int val;
         if (sscanf(line, "menu_at_start=%d", &val) == 1) {
             g_menu_at_start = val ? 1 : 0;
+        } else if (sscanf(line, "auto_menu=%d", &val) == 1) {
+            g_auto_menu = val ? 1 : 0;
         }
     }
     fclose(f);
@@ -3679,7 +3682,7 @@ void retro_run(void)
      * menu with X/START, qpsx_apply_config() already ran on close; running it
      * again at frame 250 while the game is rendering stalls the device. */
     if (run_frame_count == 250 && !menu_active && auto_menu_frames == 0 &&
-        !menu_was_manually_closed) {
+        !menu_was_manually_closed && g_auto_menu) {
         XLOG("QPSX_084: AUTO-OPENING INVISIBLE MENU");
         auto_menu_frames = 3;  /* Just 3 frames - menu is invisible anyway */
         menu_active = 1;
