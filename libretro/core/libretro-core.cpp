@@ -1545,11 +1545,9 @@ static void fb_init_game_dir(void) {
 
 /* Scan game directory for .cue files only (v284: simplified) */
 static void fb_scan_cue_files(void) {
-    /* fs_readdir buffer structure (SF2000 firmware) */
-    union {
-        struct { uint8_t _1[0x10]; uint32_t type; };
-        struct { uint8_t _2[0x22]; char d_name[0x225]; };
-        uint8_t __[0x428];
+    struct {
+        unsigned int d_ino;
+        char d_name[256];
     } buffer;
 
     fb_file_count = 0;
@@ -1565,7 +1563,7 @@ static void fb_scan_cue_files(void) {
     /* Read directory - only .cue files */
     while (fb_file_count < FB_MAX_FILES) {
         memset(&buffer, 0, sizeof(buffer));
-        if (fs_readdir(dir_fd, &buffer) < 0) break;
+        if (fs_readdir(dir_fd, &buffer) <= 0) break;
 
         /* Only .cue files */
         if (!str_ends_with_cue(buffer.d_name)) continue;
