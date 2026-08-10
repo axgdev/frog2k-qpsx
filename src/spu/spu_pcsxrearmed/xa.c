@@ -18,6 +18,7 @@
 #include "stdafx.h"
 #define _IN_XA
 #include <stdint.h>
+#include <sys/time.h>
 
 // will be included from spu.c
 #ifdef _IN_SPU
