@@ -207,7 +207,7 @@ int LoadCdrom() {
 	EXE_HEADER tmpHead;
 	struct iso_directory_record *dir;
 	u8 time[4], *buf;
-	u8 mdir[4096];
+	static u8 mdir[4096];
 	char exename[256];
 
 	// not the best place to do it, but since BIOS boot logo killer
