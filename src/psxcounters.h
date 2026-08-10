@@ -53,6 +53,7 @@ u32 psxRcntRtarget(u32 index);
 
 int psxRcntFreeze(void* f, FreezeMode mode);
 void psxRcntInitFromFreeze(void);
+void psxRcntCompleteExternalFreeze(void);
 
 void psxRcntAdjustTimestamps(const uint32_t prev_cycle_val);
 
