@@ -4062,6 +4062,8 @@ static int mem_state_run_load(const unsigned char *data, unsigned long capacity)
   SaveFuncs = mem_state_funcs();
   result = LoadState("");
   SaveFuncs = saved;
+  if (result == 0)
+    psxRcntCompleteExternalFreeze();
   return result;
 }
 

@@ -618,6 +618,11 @@ void psxRcntInitFromFreeze(void)
 	rcntFreezeLoaded = true;
 }
 
+void psxRcntCompleteExternalFreeze(void)
+{
+	rcntFreezeLoaded = false;
+}
+
 /******************************************************************************/
 // Called before psxRegs.cycle is adjusted back to zero
 //  by PSXINT_RESET_CYCLE_VAL event in psxevents.cpp
