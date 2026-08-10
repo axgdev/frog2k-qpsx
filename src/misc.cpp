@@ -922,12 +922,6 @@ int LoadState(const char *file) {
 	psxRegs.psxH=psxH;
 	psxRegs.io_cycle_counter=0;
 
-	//senquack - Clear & intialize new event scheduler queue based on
-	// saved contents of psxRegs.interrupt and psxRegs.intCycle[]
-	// NOTE: important to do this before calling any functions like
-	// psxRcntFreeze() that will queue events of their own.
-	psxEvqueueInitFromFreeze();
-
 	if (Config.HLE)
 		psxBiosFreeze(0);
 
@@ -967,6 +961,12 @@ int LoadState(const char *file) {
 	     psxRcntFreeze(f, FREEZE_LOAD)  ||
 	     mdecFreeze(f, FREEZE_LOAD)     )
 		goto error;
+
+	/* Rebuild only after rcnts[] has been restored.  This routine rebases
+	 * psxRegs.cycle to zero and adjusts root-counter timestamps; doing it
+	 * before psxRcntFreeze() adjusts stale counters and then overwrites them
+	 * with unrebased values from the state. */
+	psxEvqueueInitFromFreeze();
 
 	//XXX: HACK December 2016 -- see comment above
 skip_missing_data_hack:
