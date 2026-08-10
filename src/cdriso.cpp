@@ -985,8 +985,10 @@ static int parsecue(const char *isofile) {
 				}
 
 				if (!found_alt) {
-					printf(("\ncould not open: %s (or .binadpcm/.binwav)\n"), filepath);
-					continue;
+					printf(("\ncould not open cue track: %s (or .binadpcm/.binwav)\n"), filepath);
+					/* Do not leave a partially populated track table behind. */
+					fclose(fi);
+					return -1;
 				}
 			}
 			/* v257: Store filepath for compressed format lookup later */
@@ -1019,7 +1021,7 @@ static int parsecue(const char *isofile) {
 			}
 
 			if (numtracks == 0 && strlen(isofile) >= 4 &&
-				strcmp(isofile + strlen(isofile) - 4, ".cue") == 0)
+				strcasecmp(isofile + strlen(isofile) - 4, ".cue") == 0)
 			{
 				// user selected .cue as image file, use it's data track instead
 				fclose(cdHandle);
@@ -1737,6 +1739,8 @@ long CDR_open(void) {
 	boolean isMode1CDR_ = FALSE;
 	char alt_bin_filename[MAXPATHLEN];
 	const char *bin_filename;
+	const char *extension;
+	int i;
 
 	if (cdHandle != NULL) {
 		return 0; // it's already open
@@ -1772,6 +1776,20 @@ long CDR_open(void) {
 	}
 	else if (parsecue(GetIsoFile()) == 0) {
 		printf("[+cue]");
+	}
+	else if ((extension = strrchr(GetIsoFile(), '.')) != NULL &&
+			strcasecmp(extension, ".cue") == 0) {
+		printf("[cue parse failed]");
+		fclose(cdHandle);
+		cdHandle = NULL;
+		for (i = 1; i < MAXTRACKS; i++) {
+			if (ti[i].handle != NULL) {
+				fclose(ti[i].handle);
+				ti[i].handle = NULL;
+			}
+		}
+		numtracks = 0;
+		return -1;
 	}
 #ifndef NO_ZLIB
 	if (handlepbp(GetIsoFile()) == 0) {
