@@ -67,7 +67,7 @@ extern "C" {
  * When enabled via menu, writes to /mnt/sda1/log.txt
  */
 static FILE *debug_log_file = NULL;
-static const char *DEBUG_LOG_PATH = "/mnt/sda1/log.txt";
+static const char *DEBUG_LOG_PATH = "/mnt/sd/log.txt";
 
 /* Global flag for debug logging (set from qpsx_config.debug_log) */
 static int g_debug_log_enabled = 0;
@@ -683,11 +683,11 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
 }
 
 #define QPSX_VERSION "398"
-#define QPSX_GLOBAL_CONFIG_PATH "/mnt/sda1/cores/config/pcsx4all.cfg"
-#define QPSX_NATIVE_CONFIG_PATH "/mnt/sda1/cores/config/psx_native.cfg"
-#define QPSX_ASM_CONFIG_PATH "/mnt/sda1/cores/config/psx_asm.cfg"
-#define QPSX_CRASH_MARKER_PATH "/mnt/sda1/cores/config/psx_crash.tmp"
-#define QPSX_STARTUP_CONFIG_PATH "/mnt/sda1/cores/config/psx_startup.cfg"
+#define QPSX_GLOBAL_CONFIG_PATH "/mnt/sd/cores/config/pcsx4all.cfg"
+#define QPSX_NATIVE_CONFIG_PATH "/mnt/sd/cores/config/psx_native.cfg"
+#define QPSX_ASM_CONFIG_PATH "/mnt/sd/cores/config/psx_asm.cfg"
+#define QPSX_CRASH_MARKER_PATH "/mnt/sd/cores/config/psx_crash.tmp"
+#define QPSX_STARTUP_CONFIG_PATH "/mnt/sd/cores/config/psx_startup.cfg"
 
 /* v395: Global startup option - whether to open menu at startup */
 static int g_menu_at_start = 1;  /* default: show menu at start */
@@ -1537,7 +1537,7 @@ static void fb_init_game_dir(void) {
         *last_slash = '\0';
     } else {
         /* Fallback if no slash found */
-        strcpy(fb_game_dir, "/mnt/sda1/ROMS");
+        strcpy(fb_game_dir, "/mnt/sd/ROMS");
     }
     XLOG("CD swap dir: %s", fb_game_dir);
 }
@@ -1914,14 +1914,14 @@ static void get_game_config_path(char *path, int maxlen)
     const char *base = strrchr(game_path, '/');
     if (!base) base = strrchr(game_path, '\\');
     if (base) base++; else base = game_path;
-    snprintf(path, maxlen, "/mnt/sda1/cores/config/%s.cfg", base);
+    snprintf(path, maxlen, "/mnt/sd/cores/config/%s.cfg", base);
 }
 
 static void get_slus_config_path(char *path, int maxlen)
 {
     /* Secondary: SLUS/SCES/SLES-based config */
     if (CdromId[0] != '\0') {
-        snprintf(path, maxlen, "/mnt/sda1/cores/config/%s.cfg", CdromId);
+        snprintf(path, maxlen, "/mnt/sd/cores/config/%s.cfg", CdromId);
     } else {
         path[0] = '\0';
     }
@@ -2125,7 +2125,7 @@ static int find_matching_slus_config(char *result_path, int maxlen)
 
     XLOG("v340: Scanning for SLUS config matching CdromId=%s, game=%s", CdromId, game_name);
 
-    int dir = fs_opendir("/mnt/sda1/cores/config");
+    int dir = fs_opendir("/mnt/sd/cores/config");
     if (dir < 0) {
         XLOG("v340: Cannot open config directory");
         return 0;
@@ -2149,7 +2149,7 @@ static int find_matching_slus_config(char *result_path, int maxlen)
 
         /* Build full path and read config */
         char cfg_path[300];
-        snprintf(cfg_path, sizeof(cfg_path), "/mnt/sda1/cores/config/%s", entry.d_name);
+        snprintf(cfg_path, sizeof(cfg_path), "/mnt/sd/cores/config/%s", entry.d_name);
 
         FILE *f = fopen(cfg_path, "r");
         if (!f) continue;
@@ -3847,7 +3847,7 @@ bool retro_load_game(const struct retro_game_info *info)
     Config.FrameLimit = 0;
     Config.Cpu = 0;
 
-    snprintf(Config.BiosDir, sizeof(Config.BiosDir), "/mnt/sda1/bios");
+    snprintf(Config.BiosDir, sizeof(Config.BiosDir), "/mnt/sd/bios");
     snprintf(Config.Bios, sizeof(Config.Bios), "%s", qpsx_config.bios_file);
     XLOG("BIOS: %s/%s", Config.BiosDir, Config.Bios);
 
@@ -3864,7 +3864,7 @@ bool retro_load_game(const struct retro_game_info *info)
      *       No migration - each game starts fresh with per-game saves.
      */
     {
-        static const char* PSX_SAVE_DIR = "/mnt/sda1/ROMS/SAVE/PSX";
+        static const char* PSX_SAVE_DIR = "/mnt/sd/ROMS/SAVE/PSX";
         char game_name_buf[256];
 
         /* Get game name from loaded game path */
@@ -3872,7 +3872,7 @@ bool retro_load_game(const struct retro_game_info *info)
         XLOG("v396: Game name for memcard: %s", game_name_buf);
 
         /* Create save directories if they don't exist */
-        fs_mkdir("/mnt/sda1/ROMS/SAVE", 0755);
+        fs_mkdir("/mnt/sd/ROMS/SAVE", 0755);
         fs_mkdir(PSX_SAVE_DIR, 0755);
 
         /* Build per-game memory card path */
