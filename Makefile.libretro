@@ -118,8 +118,6 @@ endif
 # XA audio hack
 MORE_CFLAGS += -DXA_HACK
 
-MORE_CFLAGS += $(QPSX_PLATFORM_CFLAGS)
-
 override CFLAGS += $(MORE_CFLAGS) $(QPSX_PLATFORM_CFLAGS)
 CXXFLAGS ?= $(filter-out -Wno-incompatible-pointer-types -Wno-implicit-function-declaration -Wno-int-conversion,$(CFLAGS))
 override CXXFLAGS += $(MORE_CFLAGS) $(QPSX_PLATFORM_CFLAGS)
