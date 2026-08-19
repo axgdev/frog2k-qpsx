@@ -51,6 +51,23 @@
 #include <time.h>       /* v283: For time() in CD swap */
 #include <sys/time.h>
 
+/* Make direct source builds deterministic too; the Makefile defines both. */
+#ifndef QPSX_PLATFORM_UNIFROG
+#define QPSX_PLATFORM_UNIFROG 1
+#endif
+#ifndef QPSX_PLATFORM_LINUX
+#define QPSX_PLATFORM_LINUX 0
+#endif
+#if QPSX_PLATFORM_UNIFROG && QPSX_PLATFORM_LINUX
+#error "QPSX platform selection is ambiguous"
+#endif
+
+#if QPSX_PLATFORM_LINUX
+#define QPSX_SD_ROOT "/mnt/sd"
+#else
+#define QPSX_SD_ROOT "/mnt/sda1"
+#endif
+
 /* SF2000 xlog and timer */
 #ifdef SF2000
 extern "C" {
@@ -64,10 +81,10 @@ extern "C" {
  * QPSX_075: Debug Logging System
  *
  * Debug logs disabled by default (were causing slowdown)
- * When enabled via menu, writes to /mnt/sda1/log.txt
+ * When enabled via menu, writes to the platform SD log path.
  */
 static FILE *debug_log_file = NULL;
-static const char *DEBUG_LOG_PATH = "/mnt/sd/log.txt";
+static const char *DEBUG_LOG_PATH = QPSX_SD_ROOT "/log.txt";
 
 /* Global flag for debug logging (set from qpsx_config.debug_log) */
 static int g_debug_log_enabled = 0;
@@ -107,9 +124,23 @@ static void update_debug_log_state(int enabled)
 
 /* v343: Only log when debug_log enabled (was always logging) */
 #ifdef SF2000
+#if QPSX_PLATFORM_UNIFROG
+extern "C" void unifrog_core_load_progress(const char *stage, unsigned current, unsigned total);
+#define LOAD_STAGE(stage, current, total, fmt, ...) do { \
+    xlog("QPSX_LOAD: " fmt "\n", ##__VA_ARGS__); \
+    unifrog_core_load_progress(stage, current, total); \
+} while (0)
+#else
+#define LOAD_STAGE(stage, current, total, fmt, ...) do { \
+    (void)(stage); (void)(current); (void)(total); \
+} while (0)
+#endif
 #define XLOG(fmt, ...) do { if (g_debug_log_enabled) xlog("QPSX: " fmt "\n", ##__VA_ARGS__); } while(0)
 #else
 #define XLOG(fmt, ...) do { if (g_debug_log_enabled) printf("QPSX: " fmt "\n", ##__VA_ARGS__); } while(0)
+#define LOAD_STAGE(stage, current, total, fmt, ...) do { \
+    (void)(stage); (void)(current); (void)(total); \
+} while (0)
 #endif
 
 /* Debug logs - only when enabled, write to file */
@@ -683,14 +714,14 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
 }
 
 #define QPSX_VERSION "398"
-#define QPSX_GLOBAL_CONFIG_PATH "/mnt/sd/cores/config/pcsx4all.cfg"
-#define QPSX_NATIVE_CONFIG_PATH "/mnt/sd/cores/config/psx_native.cfg"
-#define QPSX_ASM_CONFIG_PATH "/mnt/sd/cores/config/psx_asm.cfg"
-#define QPSX_CRASH_MARKER_PATH "/mnt/sd/cores/config/psx_crash.tmp"
-#define QPSX_STARTUP_CONFIG_PATH "/mnt/sd/cores/config/psx_startup.cfg"
+#define QPSX_GLOBAL_CONFIG_PATH QPSX_SD_ROOT "/cores/config/pcsx4all.cfg"
+#define QPSX_NATIVE_CONFIG_PATH QPSX_SD_ROOT "/cores/config/psx_native.cfg"
+#define QPSX_ASM_CONFIG_PATH QPSX_SD_ROOT "/cores/config/psx_asm.cfg"
+#define QPSX_CRASH_MARKER_PATH QPSX_SD_ROOT "/cores/config/psx_crash.tmp"
+#define QPSX_STARTUP_CONFIG_PATH QPSX_SD_ROOT "/cores/config/psx_startup.cfg"
 
 /* v395: Global startup option - whether to open menu at startup */
-static int g_menu_at_start = 1;  /* default: show menu at start */
+static int g_menu_at_start = QPSX_PLATFORM_UNIFROG ? 0 : 1;
 static int g_auto_menu = 1;      /* default: run frame-250 compatibility pass */
 
 /* ============== v353: BITFLAGS FOR BOOLEAN OPTIONS ============== */
@@ -1529,7 +1560,7 @@ static int str_ends_with_cue(const char *str) {
 
 /* Extract directory from game_path into fb_game_dir */
 static void fb_init_game_dir(void) {
-    /* game_path is like "/mnt/sda1/ROMS/qpsx/Game.cue" */
+    /* game_path is rooted at the platform SD mount. */
     strncpy(fb_game_dir, game_path, FB_MAX_PATH - 1);
     fb_game_dir[FB_MAX_PATH - 1] = '\0';
 
@@ -1539,17 +1570,27 @@ static void fb_init_game_dir(void) {
         *last_slash = '\0';
     } else {
         /* Fallback if no slash found */
-        strcpy(fb_game_dir, "/mnt/sd/ROMS");
+        strcpy(fb_game_dir, QPSX_SD_ROOT "/ROMS");
     }
     XLOG("CD swap dir: %s", fb_game_dir);
 }
 
 /* Scan game directory for .cue files only (v284: simplified) */
 static void fb_scan_cue_files(void) {
+#if QPSX_PLATFORM_UNIFROG
+    /* HCRTOS exposes a larger directory record than the POSIX-like Linux
+     * frontend. The name is at the firmware-defined offset. */
+    union {
+        struct { uint8_t _1[0x10]; uint32_t type; };
+        struct { uint8_t _2[0x22]; char d_name[0x225]; };
+        uint8_t _raw[0x428];
+    } buffer;
+#else
     struct {
         unsigned int d_ino;
         char d_name[256];
     } buffer;
+#endif
 
     fb_file_count = 0;
     fb_selection = 0;
@@ -1564,7 +1605,11 @@ static void fb_scan_cue_files(void) {
     /* Read directory - only .cue files */
     while (fb_file_count < FB_MAX_FILES) {
         memset(&buffer, 0, sizeof(buffer));
+#if QPSX_PLATFORM_UNIFROG
+        if (fs_readdir(dir_fd, &buffer) < 0) break;
+#else
         if (fs_readdir(dir_fd, &buffer) <= 0) break;
+#endif
 
         /* Only .cue files */
         if (!str_ends_with_cue(buffer.d_name)) continue;
@@ -1914,14 +1959,14 @@ static void get_game_config_path(char *path, int maxlen)
     const char *base = strrchr(game_path, '/');
     if (!base) base = strrchr(game_path, '\\');
     if (base) base++; else base = game_path;
-    snprintf(path, maxlen, "/mnt/sd/cores/config/%s.cfg", base);
+    snprintf(path, maxlen, QPSX_SD_ROOT "/cores/config/%s.cfg", base);
 }
 
 static void get_slus_config_path(char *path, int maxlen)
 {
     /* Secondary: SLUS/SCES/SLES-based config */
     if (CdromId[0] != '\0') {
-        snprintf(path, maxlen, "/mnt/sd/cores/config/%s.cfg", CdromId);
+        snprintf(path, maxlen, QPSX_SD_ROOT "/cores/config/%s.cfg", CdromId);
     } else {
         path[0] = '\0';
     }
@@ -2125,7 +2170,7 @@ static int find_matching_slus_config(char *result_path, int maxlen)
 
     XLOG("v340: Scanning for SLUS config matching CdromId=%s, game=%s", CdromId, game_name);
 
-    int dir = fs_opendir("/mnt/sd/cores/config");
+    int dir = fs_opendir(QPSX_SD_ROOT "/cores/config");
     if (dir < 0) {
         XLOG("v340: Cannot open config directory");
         return 0;
@@ -2149,7 +2194,7 @@ static int find_matching_slus_config(char *result_path, int maxlen)
 
         /* Build full path and read config */
         char cfg_path[300];
-        snprintf(cfg_path, sizeof(cfg_path), "/mnt/sd/cores/config/%s", entry.d_name);
+        snprintf(cfg_path, sizeof(cfg_path), QPSX_SD_ROOT "/cores/config/%s", entry.d_name);
 
         FILE *f = fopen(cfg_path, "r");
         if (!f) continue;
@@ -2404,6 +2449,12 @@ static void save_startup_config(void)
 
 static void load_startup_config(void)
 {
+#if QPSX_PLATFORM_UNIFROG
+    /* UniFrog owns the launch menu; QPSX must not open a second menu before
+     * the game is visible. Keep the setting out of the HCRTOS config path. */
+    g_menu_at_start = 0;
+    return;
+#else
     FILE *f = fopen(QPSX_STARTUP_CONFIG_PATH, "r");
     if (!f) return;
     char line[64];
@@ -2416,6 +2467,7 @@ static void load_startup_config(void)
         }
     }
     fclose(f);
+#endif
 }
 
 static void set_feedback(const char *msg)
@@ -3820,6 +3872,10 @@ void retro_run(void)
 
 bool retro_load_game(const struct retro_game_info *info)
 {
+#if QPSX_PLATFORM_UNIFROG && defined(SF2000)
+    xlog_clear();
+#endif
+    LOAD_STAGE("QPSX_START", 1, 16, "start");
     XLOG("=== retro_load_game() ===");
 
     /* QPSX_085: this state belongs to one loaded game, not the core process.
@@ -3827,6 +3883,7 @@ bool retro_load_game(const struct retro_game_info *info)
     menu_was_manually_closed = 0;
 
     /* v395: Load startup config first (before game config) */
+    LOAD_STAGE("QPSX_STARTUP_CONFIG", 2, 16, "startup_config");
     load_startup_config();
 
     if (!info || !info->path) {
@@ -3835,9 +3892,12 @@ bool retro_load_game(const struct retro_game_info *info)
     }
 
     XLOG("Loading: %s", info->path);
+    LOAD_STAGE("QPSX_PATH", 4, 16, "path=%s", info->path);
     strncpy(game_path, info->path, sizeof(game_path) - 1);
 
+    LOAD_STAGE("QPSX_CONFIG", 5, 16, "config");
     qpsx_load_config();
+    LOAD_STAGE("QPSX_APPLY_CONFIG", 6, 16, "apply_config");
     qpsx_apply_config();
 
 #ifdef PSXREC
@@ -3864,11 +3924,12 @@ bool retro_load_game(const struct retro_game_info *info)
     Config.FrameLimit = 0;
     Config.Cpu = 0;
 
-    snprintf(Config.BiosDir, sizeof(Config.BiosDir), "/mnt/sd/bios");
+    snprintf(Config.BiosDir, sizeof(Config.BiosDir), QPSX_SD_ROOT "/bios");
     snprintf(Config.Bios, sizeof(Config.Bios), "%s", qpsx_config.bios_file);
     XLOG("BIOS: %s/%s", Config.BiosDir, Config.Bios);
 
-    /* Per-game memory cards use the frontend-provided save directory.
+    /* Per-game memory cards use the established UniFrog path or the Linux
+     * frontend save directory, depending on the selected platform.
      *
      * Algorithm:
      * 1. Extract game name from the loaded path
@@ -3877,12 +3938,37 @@ bool retro_load_game(const struct retro_game_info *info)
      * 4. If per-game .mcd exists -> use it
      * 5. If not -> path is set, but file will be created on first save (on-demand in sio.cpp)
      *
-     * Older Linux builds stored cards below /mnt/sd/ROMS/SAVE/PSX.  Keep
-     * using an existing card there so upgrading does not discard progress;
-     * new cards use the frontend's save directory.
+     * UniFrog historically stores cards below /mnt/sda1/ROMS/SAVE/PSX.
+     * Linux builds use /mnt/sd/saves/PSX and retain the older Linux path as a
+     * compatibility fallback.
      */
     {
-        static const char *legacy_save_dir = "/mnt/sd/ROMS/SAVE/PSX";
+#if QPSX_PLATFORM_UNIFROG
+        static const char *psx_save_dir = QPSX_SD_ROOT "/ROMS/SAVE/PSX";
+        char parent_save_dir[sizeof(Config.Mcd1)];
+        char game_name_buf[256];
+
+        get_game_name(game_name_buf, sizeof(game_name_buf));
+        if (snprintf(parent_save_dir, sizeof(parent_save_dir), "%s/ROMS/SAVE",
+                QPSX_SD_ROOT) >= (int)sizeof(parent_save_dir) ||
+            snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/%s.mcd",
+                psx_save_dir, game_name_buf) >= (int)sizeof(Config.Mcd1) ||
+            snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/shared_mcd2.mcd",
+                psx_save_dir) >= (int)sizeof(Config.Mcd2)) {
+            XLOG("Memory-card path is too long for %s", game_name_buf);
+            Config.Mcd1[0] = '\0';
+            Config.Mcd2[0] = '\0';
+            return false;
+        }
+
+        fs_mkdir(parent_save_dir, 0755);
+        fs_mkdir(psx_save_dir, 0755);
+        if (file_exists(Config.Mcd1))
+            XLOG("Per-game memcard: %s", Config.Mcd1);
+        else
+            XLOG("Per-game memcard will be created on first save: %s", Config.Mcd1);
+#else
+        static const char *legacy_save_dir = QPSX_SD_ROOT "/ROMS/SAVE/PSX";
         const char *save_root = retro_save_directory;
         char psx_save_dir[sizeof(Config.Mcd1)];
         char legacy_mcd1[sizeof(Config.Mcd1)];
@@ -3891,8 +3977,9 @@ bool retro_load_game(const struct retro_game_info *info)
 
         /* Get game name from loaded game path */
         get_game_name(game_name_buf, sizeof(game_name_buf));
-        if (!save_root || !save_root[0] || !strcmp(save_root, "."))
-            save_root = "/mnt/sd/saves";
+        if (!save_root || !save_root[0] || !strcmp(save_root, ".") ||
+            !strcmp(save_root, QPSX_SD_ROOT))
+            save_root = QPSX_SD_ROOT "/saves";
         if (snprintf(psx_save_dir, sizeof(psx_save_dir), "%s/PSX", save_root) >=
                 (int)sizeof(psx_save_dir) ||
             snprintf(legacy_mcd1, sizeof(legacy_mcd1), "%s/%s.mcd",
@@ -3929,30 +4016,43 @@ bool retro_load_game(const struct retro_game_info *info)
             snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s", legacy_mcd2);
             XLOG("Using legacy shared memcard: %s", Config.Mcd2);
         }
+#endif
     }
 
+    LOAD_STAGE("QPSX_PSX_INIT", 8, 16, "psxInit");
     if (psxInit() == -1) {
         XLOG("ERROR: psxInit() failed!");
+        LOAD_STAGE("QPSX_PSX_INIT_FAIL", 8, 16, "psxInit failed");
         return false;
     }
+    LOAD_STAGE("QPSX_PSX_INIT_OK", 9, 16, "psxInit ok");
 
+    LOAD_STAGE("QPSX_PLUGINS", 10, 16, "LoadPlugins");
     if (LoadPlugins() == -1) {
         XLOG("ERROR: LoadPlugins() failed!");
+        LOAD_STAGE("QPSX_PLUGINS_FAIL", 10, 16, "LoadPlugins failed");
         return false;
     }
+    LOAD_STAGE("QPSX_PLUGINS_OK", 11, 16, "LoadPlugins ok");
 
     psx_initted = true;
 
     SetIsoFile(game_path);
+    LOAD_STAGE("QPSX_CDR_OPEN", 12, 16, "CDR_open");
     if (CDR_open() < 0) {
         XLOG("ERROR: CDR_open() failed!");
+        LOAD_STAGE("QPSX_CDR_OPEN_FAIL", 12, 16, "CDR_open failed");
         return false;
     }
+    LOAD_STAGE("QPSX_CDR_OPEN_OK", 13, 16, "CDR_open ok");
 
+    LOAD_STAGE("QPSX_RESET", 14, 16, "psxReset");
     psxReset();
+    LOAD_STAGE("QPSX_RESET_OK", 15, 16, "psxReset ok");
 
     if (CheckCdrom() == -1) {
         XLOG("ERROR: CheckCdrom() failed!");
+        LOAD_STAGE("QPSX_CHECK_CD_FAIL", 15, 16, "CheckCdrom failed");
         return false;
     }
 
@@ -3966,13 +4066,17 @@ bool retro_load_game(const struct retro_game_info *info)
 
 
     if (Config.HLE) {
+        LOAD_STAGE("QPSX_LOAD_CDROM", 15, 16, "LoadCdrom");
         if (LoadCdrom() == -1) {
             XLOG("ERROR: LoadCdrom() failed!");
+            LOAD_STAGE("QPSX_LOAD_CDROM_FAIL", 15, 16, "LoadCdrom failed");
             return false;
         }
+        LOAD_STAGE("QPSX_LOAD_CDROM_OK", 15, 16, "LoadCdrom ok");
     }
 
     XLOG("=== Game loaded! ===");
+    LOAD_STAGE("QPSX_DONE", 16, 16, "done");
     return true;
 }
 

@@ -343,14 +343,22 @@ do { \
 #define SLTU(rd, rs, rt) \
 	write32(0x0000002b | ((rs) << 21) | ((rt) << 16) | ((rd) << 11))
 
+#if defined(QPSX_PLATFORM_LINUX) && QPSX_PLATFORM_LINUX
+#define QPSX_EMIT_JAL(addr)                                                    \
+	LI32(MIPSREG_T9, (u32)(addr));                                               \
+	write32(0x0000f809 | (MIPSREG_T9 << 21))
+#else
+#define QPSX_EMIT_JAL(addr)                                                    \
+	write32(0x0c000000 | (((u32)(addr) & 0x0fffffff) >> 2))
+#endif
+
 #define JAL(addr)                                                              \
 do {                                                                           \
     /* Function call overwrites values in 'unsaved' regs */                    \
 	lsu_tmp_cache_valid = false;                                               \
     host_v0_reg_is_const = false;                                              \
     host_ra_reg_has_block_retaddr = false;                                     \
-    LI32(MIPSREG_T9, (u32)(addr));                                              \
-    write32(0x0000f809 | (MIPSREG_T9 << 21));                                  \
+	QPSX_EMIT_JAL(addr);                                                         \
 } while (0)
 
 #define JR(rs) \

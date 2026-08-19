@@ -10,6 +10,34 @@ NAME    = pcsx4all
 O       = o
 RM      = rm -f
 
+# The source is shared by the HCRTOS/UniFrog and Linux frontends. Keep the
+# platform choice explicit so filesystem paths, RAM ownership, and generated
+# MIPS code cannot drift apart between callers.
+QPSX_PLATFORM ?= unifrog
+ifneq ($(filter unifrog linux,$(QPSX_PLATFORM)),$(QPSX_PLATFORM))
+$(error QPSX_PLATFORM must be unifrog or linux (got $(QPSX_PLATFORM)))
+endif
+
+QPSX_PLATFORM_UNIFROG := $(if $(filter unifrog,$(QPSX_PLATFORM)),1,0)
+QPSX_PLATFORM_LINUX := $(if $(filter linux,$(QPSX_PLATFORM)),1,0)
+QPSX_ENABLE_MIPS32R2 ?= 0
+
+QPSX_PLATFORM_CFLAGS := \
+	-DQPSX_PLATFORM_UNIFROG=$(QPSX_PLATFORM_UNIFROG) \
+	-DQPSX_PLATFORM_LINUX=$(QPSX_PLATFORM_LINUX) \
+	-DQPSX_ENABLE_MIPS_DIRECT_MEM=1 \
+	-DQPSX_ENABLE_MIPS_LSU_CACHING=1 \
+	-DQPSX_ENABLE_MIPS_CONST_MEM=1 \
+	-DQPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)
+ifeq ($(QPSX_PLATFORM),linux)
+QPSX_PLATFORM_CFLAGS += \
+	-DQPSX_ENABLE_MIPS_PIC_ASM_DISPATCH=1 \
+	-DQPSX_LINUX_CACHEFLUSH=1 \
+	-DQPSX_LINUX_ALLOCATED_RAM=1
+else
+QPSX_PLATFORM_CFLAGS += -DQPSX_ENABLE_MIPS_PIC_ASM_DISPATCH=0
+endif
+
 # GPU plugin selection
 GPU     = gpu_unai
 SPU     = spu_pcsxrearmed
@@ -90,8 +118,32 @@ endif
 # XA audio hack
 MORE_CFLAGS += -DXA_HACK
 
-CFLAGS  += $(MORE_CFLAGS)
-CXXFLAGS = $(CFLAGS)
+MORE_CFLAGS += $(QPSX_PLATFORM_CFLAGS)
+
+override CFLAGS += $(MORE_CFLAGS) $(QPSX_PLATFORM_CFLAGS)
+CXXFLAGS ?= $(filter-out -Wno-incompatible-pointer-types -Wno-implicit-function-declaration -Wno-int-conversion,$(CFLAGS))
+override CXXFLAGS += $(MORE_CFLAGS) $(QPSX_PLATFORM_CFLAGS)
+
+# A checkout can be reused by both frontends. Invalidate its source-tree
+# objects when the platform contract changes so Linux objects are never reused
+# for HCRTOS (or vice versa).
+QPSX_CONFIG_STAMP := .qpsx-build-config
+.PHONY: qpsx-config-force
+qpsx-config-force:
+
+$(QPSX_CONFIG_STAMP): qpsx-config-force
+	@set -eu; tmp='$@.tmp'; \
+	{ printf '%s\n' \
+		'QPSX_PLATFORM=$(QPSX_PLATFORM)' \
+		'QPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)' \
+		'CC=$(CC)' 'CXX=$(CXX)' 'AR=$(AR)'; \
+	} > "$$tmp"; \
+	if ! cmp -s "$$tmp" '$@' 2>/dev/null; then \
+		rm -f $(OBJS) '$(TARGET)'; \
+		mv "$$tmp" '$@'; \
+	else \
+		rm -f "$$tmp"; \
+	fi
 
 # Object files - Core PSX emulation
 OBJS = \
@@ -134,9 +186,11 @@ OBJS += \
 # QPSX v099: Added psxmem_asm.o for memory write optimization
 ifeq ($(platform), sf2000)
 OBJS += \
-	src/gpu/$(GPU)/gpu_inner_mips32.o \
 	src/gte_asm.o \
 	src/psxmem_asm.o
+ifeq ($(QPSX_ENABLE_MIPS32R2), 1)
+OBJS += src/gpu/$(GPU)/gpu_inner_mips32.o
+endif
 endif
 
 # SPU - pcsxrearmed with libretro audio backend
@@ -149,8 +203,8 @@ OBJS += \
 	src/spu/$(SPU)/registers.o \
 	src/spu/$(SPU)/libretro.o
 
-# QPSX v111: MIPS32 ASM CDDA mixer (SF2000 only)
-ifeq ($(RECOMPILER), mips)
+# QPSX v111: MIPS32 ASM CDDA mixer (both supported MIPS frontends)
+ifneq ($(filter unifrog linux,$(QPSX_PLATFORM)),)
 OBJS += \
 	src/spu/$(SPU)/cdda_mix_asm.o
 endif
@@ -169,6 +223,8 @@ OBJS += \
 OBJS += \
 	libretro/core/libretro-core.o
 
+$(OBJS): $(QPSX_CONFIG_STAMP)
+
 $(TARGET): $(OBJS)
 ifeq ($(STATIC_LINKING), 1)
 	$(AR) rcs $@ $(OBJS)
@@ -177,7 +233,7 @@ else
 endif
 
 clean:
-	$(RM) $(TARGET) $(OBJS)
+	$(RM) $(TARGET) $(OBJS) $(QPSX_CONFIG_STAMP)
 
 # Compilation rules
 %.o: %.c
