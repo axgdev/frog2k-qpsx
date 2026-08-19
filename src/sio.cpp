@@ -26,7 +26,7 @@
 #include "psxevents.h"
 #include "misc.h"
 #include <sys/stat.h>
-#ifndef SF2000
+#if !defined(SF2000) || defined(QPSX_LINUX_ALLOCATED_RAM)
 #include <unistd.h>
 #endif
 
@@ -602,8 +602,9 @@ int FlushMcd(enum MemcardNum mcd_num, bool sync_file)
 	int retval = 0;
 	if (sync_file) {
 		if (fflush(mc.file)) retval = -1;
-#ifndef SF2000
-		/* v397: Skip fsync on SF2000 bare metal - can hang indefinitely */
+#if !defined(SF2000) || defined(QPSX_LINUX_ALLOCATED_RAM)
+		/* Bare-metal SF2000 filesystems can hang in fsync; Linux must make
+		 * memory-card writes durable before the core continues. */
 		if (fsync(fileno(mc.file))) retval = -1;
 #endif
 	}
@@ -707,8 +708,9 @@ int CreateMcd(char *filename, bool overwrite_file)
 	}
 	SIO_LOG("CreateMcd: fflush OK");
 
-#ifndef SF2000
-	/* SF2000: Skip fsync - can hang on bare metal */
+#if !defined(SF2000) || defined(QPSX_LINUX_ALLOCATED_RAM)
+	/* Bare-metal SF2000 filesystems can hang in fsync; Linux can and should
+	 * durably commit the newly-created card before opening it for updates. */
 	SIO_LOG("CreateMcd: calling fsync");
 	if (fsync(fileno(f))) {
 		SIO_LOG("CreateMcd: fsync failed!");

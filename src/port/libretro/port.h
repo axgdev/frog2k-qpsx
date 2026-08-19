@@ -19,6 +19,9 @@
 
 /* SF2000 lacks these */
 #ifdef SF2000
+#ifdef QPSX_LINUX_ALLOCATED_RAM
+#include <unistd.h>
+#else
 static inline int fsync(int f) { (void)f; return 0; }
 /* usleep - use busy wait on bare metal (microseconds) */
 static inline int usleep(unsigned usec) {
@@ -27,6 +30,7 @@ static inline int usleep(unsigned usec) {
     (void)usec;
     return 0;
 }
+#endif
 #endif
 
 #define	CONFIG_VERSION	0

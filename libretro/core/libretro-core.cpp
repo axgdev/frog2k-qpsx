@@ -3868,40 +3868,66 @@ bool retro_load_game(const struct retro_game_info *info)
     snprintf(Config.Bios, sizeof(Config.Bios), "%s", qpsx_config.bios_file);
     XLOG("BIOS: %s/%s", Config.BiosDir, Config.Bios);
 
-    /* v396: Per-game memory cards in /mnt/sda1/ROMS/SAVE/PSX/
+    /* Per-game memory cards use the frontend-provided save directory.
      *
      * Algorithm:
-     * 1. Extract game name from path (e.g., "Tekken 3" from "/mnt/sda1/ROMS/qpsx/Tekken 3.cue")
-     * 2. Build per-game path: /mnt/sda1/ROMS/SAVE/PSX/Tekken 3.mcd
+     * 1. Extract game name from the loaded path
+     * 2. Build per-game path: <save directory>/PSX/<game>.mcd
      * 3. Create PSX directory if it doesn't exist
      * 4. If per-game .mcd exists -> use it
      * 5. If not -> path is set, but file will be created on first save (on-demand in sio.cpp)
      *
-     * Note: Old shared memory cards in /mnt/sda1/cores/config/ are abandoned.
-     *       No migration - each game starts fresh with per-game saves.
+     * Older Linux builds stored cards below /mnt/sd/ROMS/SAVE/PSX.  Keep
+     * using an existing card there so upgrading does not discard progress;
+     * new cards use the frontend's save directory.
      */
     {
-        static const char* PSX_SAVE_DIR = "/mnt/sd/ROMS/SAVE/PSX";
+        static const char *legacy_save_dir = "/mnt/sd/ROMS/SAVE/PSX";
+        const char *save_root = retro_save_directory;
+        char psx_save_dir[sizeof(Config.Mcd1)];
+        char legacy_mcd1[sizeof(Config.Mcd1)];
+        char legacy_mcd2[sizeof(Config.Mcd2)];
         char game_name_buf[256];
 
         /* Get game name from loaded game path */
         get_game_name(game_name_buf, sizeof(game_name_buf));
-        XLOG("v396: Game name for memcard: %s", game_name_buf);
+        if (!save_root || !save_root[0] || !strcmp(save_root, "."))
+            save_root = "/mnt/sd/saves";
+        if (snprintf(psx_save_dir, sizeof(psx_save_dir), "%s/PSX", save_root) >=
+                (int)sizeof(psx_save_dir) ||
+            snprintf(legacy_mcd1, sizeof(legacy_mcd1), "%s/%s.mcd",
+                legacy_save_dir, game_name_buf) >= (int)sizeof(legacy_mcd1) ||
+            snprintf(legacy_mcd2, sizeof(legacy_mcd2), "%s/shared_mcd2.mcd",
+                legacy_save_dir) >= (int)sizeof(legacy_mcd2)) {
+            XLOG("Memory-card path is too long for %s", game_name_buf);
+            Config.Mcd1[0] = '\0';
+            Config.Mcd2[0] = '\0';
+            return false;
+        }
 
         /* Create save directories if they don't exist */
-        fs_mkdir("/mnt/sd/ROMS/SAVE", 0755);
-        fs_mkdir(PSX_SAVE_DIR, 0755);
+        fs_mkdir(save_root, 0755);
+        fs_mkdir(psx_save_dir, 0755);
 
         /* Build per-game memory card path */
-        snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/%s.mcd", PSX_SAVE_DIR, game_name_buf);
-
-        /* MCD2 (slot 2) - rarely used, keep as shared card or empty */
-        snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/shared_mcd2.mcd", PSX_SAVE_DIR);
+        snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/%s.mcd",
+            psx_save_dir, game_name_buf);
+        snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/shared_mcd2.mcd",
+            psx_save_dir);
 
         if (file_exists(Config.Mcd1)) {
-            XLOG("v396: Per-game memcard EXISTS: %s", Config.Mcd1);
+            XLOG("Per-game memcard: %s", Config.Mcd1);
+        } else if (file_exists(legacy_mcd1)) {
+            snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s", legacy_mcd1);
+            XLOG("Using legacy per-game memcard: %s", Config.Mcd1);
         } else {
-            XLOG("v396: Per-game memcard will be created on first save: %s", Config.Mcd1);
+            XLOG("Per-game memcard will be created on first save: %s", Config.Mcd1);
+        }
+        if (file_exists(Config.Mcd2)) {
+            XLOG("Shared memcard: %s", Config.Mcd2);
+        } else if (file_exists(legacy_mcd2)) {
+            snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s", legacy_mcd2);
+            XLOG("Using legacy shared memcard: %s", Config.Mcd2);
         }
     }
 
