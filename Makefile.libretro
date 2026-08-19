@@ -90,8 +90,13 @@ endif
 # XA audio hack
 MORE_CFLAGS += -DXA_HACK
 
+ifeq ($(QPSX_ENABLE_MIPS32R2), 1)
+MORE_CFLAGS += -DQPSX_ENABLE_MIPS32R2=1
+endif
+
 CFLAGS  += $(MORE_CFLAGS)
-CXXFLAGS = $(CFLAGS)
+CXXFLAGS = $(filter-out -Wno-incompatible-pointer-types -Wno-implicit-function-declaration -Wno-int-conversion,$(CFLAGS))
+CFLAGS := $(filter-out -fno-use-cxa-atexit -fno-threadsafe-statics -fno-exceptions -fno-rtti,$(CFLAGS))
 
 # Object files - Core PSX emulation
 OBJS = \
@@ -134,9 +139,12 @@ OBJS += \
 # QPSX v099: Added psxmem_asm.o for memory write optimization
 ifeq ($(platform), sf2000)
 OBJS += \
-	src/gpu/$(GPU)/gpu_inner_mips32.o \
 	src/gte_asm.o \
 	src/psxmem_asm.o
+ifeq ($(QPSX_ENABLE_MIPS32R2), 1)
+OBJS += \
+	src/gpu/$(GPU)/gpu_inner_mips32.o
+endif
 endif
 
 # SPU - pcsxrearmed with libretro audio backend

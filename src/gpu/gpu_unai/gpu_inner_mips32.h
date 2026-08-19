@@ -22,8 +22,7 @@
  * When disabled, falls back to C implementations.
  */
 
-#if (defined(SF2000) || defined(__mips__)) && \
-    !defined(QPSX_DISABLE_MIPS32R2_GPU_ASM)
+#if defined(QPSX_ENABLE_MIPS32R2) && QPSX_ENABLE_MIPS32R2
 
 #ifdef __cplusplus
 extern "C" {
@@ -121,7 +120,7 @@ static inline u16 gpuBlending_ASM(u16 uSrc, u16 uDst)
     return uSrc;
 }
 
-#else /* !SF2000 && !__mips__ */
+#else /* !QPSX_ENABLE_MIPS32R2 */
 
 /* Fallback stubs for non-MIPS platforms (compilation only) */
 #define gpuLightingTXT_ASM(uSrc, r5, g5, b5)     gpuLightingTXT_Fast(uSrc, r5, g5, b5)
@@ -138,6 +137,6 @@ static inline u16 gpuBlending_ASM(u16 uSrc, u16 uDst)
     return gpuBlending_Fast<BLENDMODE>(uSrc, uDst);
 }
 
-#endif /* SF2000 || __mips__ */
+#endif /* QPSX_ENABLE_MIPS32R2 */
 
 #endif /* GPU_INNER_MIPS32_H */

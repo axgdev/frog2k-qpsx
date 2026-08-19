@@ -107,9 +107,12 @@ static void update_debug_log_state(int enabled)
 
 /* v343: Only log when debug_log enabled (was always logging) */
 #ifdef SF2000
+extern "C" void unifrog_core_load_progress(const char *stage, unsigned current, unsigned total);
 #define XLOG(fmt, ...) do { if (g_debug_log_enabled) xlog("QPSX: " fmt "\n", ##__VA_ARGS__); } while(0)
+#define LOAD_STAGE(stage, current, total, fmt, ...) do { xlog("QPSX_LOAD: " fmt "\n", ##__VA_ARGS__); unifrog_core_load_progress(stage, current, total); } while(0)
 #else
 #define XLOG(fmt, ...) do { if (g_debug_log_enabled) printf("QPSX: " fmt "\n", ##__VA_ARGS__); } while(0)
+#define LOAD_STAGE(stage, current, total, fmt, ...) do { printf("QPSX_LOAD: " fmt "\n", ##__VA_ARGS__); } while(0)
 #endif
 
 /* Debug logs - only when enabled, write to file */
@@ -368,7 +371,9 @@ static int g_resampler_type = 0;
  * Threshold 64 = only stretch when buffer CRITICALLY low
  * At 100% speed: buffer rarely drops below 100, so no unnecessary stretching
  * At 50% speed: buffer drops to 50-80 range, stretch triggers correctly */
-extern "C" int qpsx_sound_mode = 1;  /* v392: 0=OFF(silence), 1=ON(normal), 2=TURBO(small buffer) */
+extern "C" {
+int qpsx_sound_mode = 1;  /* v392: 0=OFF(silence), 1=ON(normal), 2=TURBO(small buffer) */
+}
 static int16_t g_silence_buffer[1024 * 2] = {0};  /* v392: Pre-zeroed silence buffer for Sound OFF */
 static int16_t g_audio_buffer[512 * 2];   /* 2KB buffer for cache efficiency */
 static int g_audio_buffer_pos = 0;
@@ -690,7 +695,7 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
 #define QPSX_STARTUP_CONFIG_PATH "/mnt/sda1/cores/config/psx_startup.cfg"
 
 /* v395: Global startup option - whether to open menu at startup */
-static int g_menu_at_start = 1;  /* default: show menu at start */
+static int g_menu_at_start = 0;  /* UniFrog uses its own launch menu. */
 static int g_auto_menu = 1;      /* default: run frame-250 compatibility pass */
 
 /* ============== v353: BITFLAGS FOR BOOLEAN OPTIONS ============== */
@@ -876,7 +881,9 @@ static native_cmd_entry_t native_cmd_list[NCMD_MAX] = {
 static int native_cmd_count = 0;  /* Set during init */
 
 /* v245: Quick check - 1 if ANY native command enabled, 0 if ALL disabled */
-extern "C" int native_any_cmd_enabled = 1;
+extern "C" {
+int native_any_cmd_enabled = 1;
+}
 
 static void native_cmd_update_any_enabled(void) {
     native_any_cmd_enabled = 0;
@@ -2406,6 +2413,10 @@ static void save_startup_config(void)
 
 static void load_startup_config(void)
 {
+#ifdef SF2000
+    g_menu_at_start = 0;
+    return;
+#else
     FILE *f = fopen(QPSX_STARTUP_CONFIG_PATH, "r");
     if (!f) return;
     char line[64];
@@ -2418,6 +2429,7 @@ static void load_startup_config(void)
         }
     }
     fclose(f);
+#endif
 }
 
 static void set_feedback(const char *msg)
@@ -3822,6 +3834,10 @@ void retro_run(void)
 
 bool retro_load_game(const struct retro_game_info *info)
 {
+#ifdef SF2000
+    xlog_clear();
+#endif
+    LOAD_STAGE("QPSX_START", 1, 16, "start");
     XLOG("=== retro_load_game() ===");
 
     /* QPSX_085: this state belongs to one loaded game, not the core process.
@@ -3829,6 +3845,7 @@ bool retro_load_game(const struct retro_game_info *info)
     menu_was_manually_closed = 0;
 
     /* v395: Load startup config first (before game config) */
+    LOAD_STAGE("QPSX_STARTUP_CONFIG", 2, 16, "startup_config");
     load_startup_config();
 
     if (!info || !info->path) {
@@ -3837,9 +3854,12 @@ bool retro_load_game(const struct retro_game_info *info)
     }
 
     XLOG("Loading: %s", info->path);
+    LOAD_STAGE("QPSX_PATH", 4, 16, "path=%s", info->path);
     strncpy(game_path, info->path, sizeof(game_path) - 1);
 
+    LOAD_STAGE("QPSX_CONFIG", 5, 16, "config");
     qpsx_load_config();
+    LOAD_STAGE("QPSX_APPLY_CONFIG", 6, 16, "apply_config");
     qpsx_apply_config();
 
 #ifdef PSXREC
@@ -3907,30 +3927,44 @@ bool retro_load_game(const struct retro_game_info *info)
         }
     }
 
+    LOAD_STAGE("QPSX_PSX_INIT", 8, 16, "psxInit");
     if (psxInit() == -1) {
         XLOG("ERROR: psxInit() failed!");
+        LOAD_STAGE("QPSX_PSX_INIT_FAIL", 8, 16, "psxInit failed");
         return false;
     }
+    LOAD_STAGE("QPSX_PSX_INIT_OK", 9, 16, "psxInit ok");
 
+    LOAD_STAGE("QPSX_PLUGINS", 10, 16, "LoadPlugins");
     if (LoadPlugins() == -1) {
         XLOG("ERROR: LoadPlugins() failed!");
+        LOAD_STAGE("QPSX_PLUGINS_FAIL", 10, 16, "LoadPlugins failed");
         return false;
     }
+    LOAD_STAGE("QPSX_PLUGINS_OK", 11, 16, "LoadPlugins ok");
 
     psx_initted = true;
 
     SetIsoFile(game_path);
+    LOAD_STAGE("QPSX_CDR_OPEN", 12, 16, "CDR_open");
     if (CDR_open() < 0) {
         XLOG("ERROR: CDR_open() failed!");
+        LOAD_STAGE("QPSX_CDR_OPEN_FAIL", 12, 16, "CDR_open failed");
         return false;
     }
+    LOAD_STAGE("QPSX_CDR_OPEN_OK", 13, 16, "CDR_open ok");
 
+    LOAD_STAGE("QPSX_RESET", 14, 16, "psxReset");
     psxReset();
+    LOAD_STAGE("QPSX_RESET_OK", 15, 16, "psxReset ok");
 
+    LOAD_STAGE("QPSX_CHECK_CD", 15, 16, "CheckCdrom");
     if (CheckCdrom() == -1) {
         XLOG("ERROR: CheckCdrom() failed!");
+        LOAD_STAGE("QPSX_CHECK_CD_FAIL", 15, 16, "CheckCdrom failed");
         return false;
     }
+    LOAD_STAGE("QPSX_CHECK_CD_OK", 15, 16, "CheckCdrom ok");
 
     /* QPSX_277: FIX - Reinitialize timing after region detection! */
     psxRcntReinitTiming();
@@ -3942,13 +3976,17 @@ bool retro_load_game(const struct retro_game_info *info)
 
 
     if (Config.HLE) {
+        LOAD_STAGE("QPSX_LOAD_CDROM", 15, 16, "LoadCdrom");
         if (LoadCdrom() == -1) {
             XLOG("ERROR: LoadCdrom() failed!");
+            LOAD_STAGE("QPSX_LOAD_CDROM_FAIL", 15, 16, "LoadCdrom failed");
             return false;
         }
+        LOAD_STAGE("QPSX_LOAD_CDROM_OK", 15, 16, "LoadCdrom ok");
     }
 
     XLOG("=== Game loaded! ===");
+    LOAD_STAGE("QPSX_DONE", 16, 16, "done");
     return true;
 }
 

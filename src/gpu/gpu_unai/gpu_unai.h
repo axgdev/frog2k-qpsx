@@ -329,23 +329,19 @@ static inline bool DitheringEnabled()
  */
 static inline bool AsmLightingEnabled()
 {
-#if defined(QPSX_DISABLE_MIPS32R2_GPU_ASM)
+#if !defined(QPSX_ENABLE_MIPS32R2) || !QPSX_ENABLE_MIPS32R2
 	return false;
-#elif defined(SF2000) || defined(__mips__)
-	return gpu_unai.config.asm_lighting;
 #else
-	return false;  // Not available on non-MIPS
+	return gpu_unai.config.asm_lighting;
 #endif
 }
 
 static inline bool AsmBlendingEnabled()
 {
-#if defined(QPSX_DISABLE_MIPS32R2_GPU_ASM)
+#if !defined(QPSX_ENABLE_MIPS32R2) || !QPSX_ENABLE_MIPS32R2
 	return false;
-#elif defined(SF2000) || defined(__mips__)
-	return gpu_unai.config.asm_blending;
 #else
-	return false;
+	return gpu_unai.config.asm_blending;
 #endif
 }
 
