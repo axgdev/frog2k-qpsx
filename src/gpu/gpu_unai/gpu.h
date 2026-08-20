@@ -38,6 +38,12 @@ struct gpu_unai_config_t {
 	                          //  Normally 0. Value '1' will skip rendering
 	                          //  odd lines.
 
+	uint8_t half_res:1;       // QPSX: Render only every other line in 240p
+	                          //  (and every other field in 480i), halving
+	                          //  rasterizer fill rate. The host upscaler
+	                          //  doubles the compacted framebuffer back to
+	                          //  full screen, so output stays 320x240-ish.
+
 	uint8_t pixel_size:2;     // v346: Pixel doubling mode for vout_port ONLY
 	                          //  0=1x1 (normal), 1=2x1 (line double),
 	                          //  2=2x2 (pixel double). Separate from ilace_force

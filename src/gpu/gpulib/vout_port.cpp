@@ -19,6 +19,12 @@
 #include "port.h"
 #include "gpu.h"
 
+/* Set by vout_update(): the line-skip mask the rasterizers used and the
+ * number of compacted output rows written. The port layer presents only
+ * those rows and the host upscaler doubles them back to full screen. */
+extern volatile int gpu_out_ilace_mask;
+extern volatile int gpu_out_height;
+
 ///////////////////////////////////////////////////////////////////////////////
 // BLITTERS TAKEN FROM gpu_unai/gpu_blit.h
 // GPU Blitting code with rescale and interlace support.
@@ -444,20 +450,33 @@ void vout_update(void)
 	int incY = (h0 == 480) ? 2 : 1;
 	h0 = ((h0 == 480) ? 2048 : 1024);
 
+	/* QPSX half-res: the rasterizers skip every other line (ilace_mask),
+	 * so compact the output rows and let the host upscaler double them.
+	 * In 480i, incY=2 already yields the full even field, so every row
+	 * is written and the output stays full height. */
+	const int li = gpu_out_ilace_mask;
+	int out_lines = 0;
+
 	switch ( w0 )
 	{
 		case 256: {
 			for (int y1=y0+h1; y0<y1; y0+=incY) {
-				GPU_BlitWWDWW(src16 + src16_offs, dst16, isRGB24);
-				dst16 += VIDEO_WIDTH;
+				if ((y0 & li) == 0) {
+					GPU_BlitWWDWW(src16 + src16_offs, dst16, isRGB24);
+					dst16 += VIDEO_WIDTH;
+					out_lines++;
+				}
 				src16_offs = (src16_offs + h0) & src16_offs_msk;
 			}
 		} break;
 
 		case 368: {
 			for (int y1=y0+h1; y0<y1; y0+=incY) {
-				GPU_BlitWWWWWWWWS(src16 + src16_offs, dst16, isRGB24, 4);
-				dst16 += VIDEO_WIDTH;
+				if ((y0 & li) == 0) {
+					GPU_BlitWWWWWWWWS(src16 + src16_offs, dst16, isRGB24, 4);
+					dst16 += VIDEO_WIDTH;
+					out_lines++;
+				}
 				src16_offs = (src16_offs + h0) & src16_offs_msk;
 			}
 		} break;
@@ -465,36 +484,50 @@ void vout_update(void)
 		case 320: {
 			src16_offs &= ~1;
 			for (int y1=y0+h1; y0<y1; y0+=incY) {
-				GPU_BlitWW(src16 + src16_offs, dst16, isRGB24);
-				dst16 += VIDEO_WIDTH;
+				if ((y0 & li) == 0) {
+					GPU_BlitWW(src16 + src16_offs, dst16, isRGB24);
+					dst16 += VIDEO_WIDTH;
+					out_lines++;
+				}
 				src16_offs = (src16_offs + h0) & src16_offs_msk;
 			}
 		} break;
 
 		case 384: {
 			for (int y1=y0+h1; y0<y1; y0+=incY) {
-				GPU_BlitWWWWWS(src16 + src16_offs, dst16, isRGB24);
-				dst16 += VIDEO_WIDTH;
+				if ((y0 & li) == 0) {
+					GPU_BlitWWWWWS(src16 + src16_offs, dst16, isRGB24);
+					dst16 += VIDEO_WIDTH;
+					out_lines++;
+				}
 				src16_offs = (src16_offs + h0) & src16_offs_msk;
 			}
 		} break;
 
 		case 512: {
 			for (int y1=y0+h1; y0<y1; y0+=incY) {
-				GPU_BlitWWSWWSWS(src16 + src16_offs, dst16, isRGB24);
-				dst16 += VIDEO_WIDTH;
+				if ((y0 & li) == 0) {
+					GPU_BlitWWSWWSWS(src16 + src16_offs, dst16, isRGB24);
+					dst16 += VIDEO_WIDTH;
+					out_lines++;
+				}
 				src16_offs = (src16_offs + h0) & src16_offs_msk;
 			}
 		} break;
 
 		case 640: {
 			for (int y1=y0+h1; y0<y1; y0+=incY) {
-				GPU_BlitWS(src16 + src16_offs, dst16, isRGB24);
-				dst16 += VIDEO_WIDTH;
+				if ((y0 & li) == 0) {
+					GPU_BlitWS(src16 + src16_offs, dst16, isRGB24);
+					dst16 += VIDEO_WIDTH;
+					out_lines++;
+				}
 				src16_offs = (src16_offs + h0) & src16_offs_msk;
 			}
 		} break;
 	}
+
+	gpu_out_height = (out_lines > 0) ? out_lines : gpu.screen.h;
 
 	video_flip();
 }

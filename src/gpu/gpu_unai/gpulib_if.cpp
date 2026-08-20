@@ -92,6 +92,12 @@ int renderer_init(void)
   // Configuration options
   GPUIF_LOG("Setting config from gpu_unai_config_ext...");
   gpu_unai.config = gpu_unai_config_ext;
+#ifdef GPU_UNAI_HALF_RES
+  // QPSX: half-res rasterization by default on the SF2000 - the host GE
+  // upscaler doubles the compacted framebuffer back to full screen, so
+  // this is a pure fill-rate win. Toggle by dropping the define.
+  gpu_unai.config.half_res = 1;
+#endif
   //senquack - disabled, not sure this is needed and would require modifying
   // sprite-span functions, perhaps unnecessarily. No Abe Oddysey hack was
   // present in latest PCSX4ALL sources we were using.
@@ -146,25 +152,30 @@ void renderer_notify_res_change(void)
     }
   } else {
     gpu_unai.blit_mask = 0;
-  }
+  }	if (LineSkipEnabled()) {
+	    // Set rendering line-skip (only render every other line in high-res
+	    //  480 vertical mode, or, optionally, force it for all video modes)
 
-  if (LineSkipEnabled()) {
-    // Set rendering line-skip (only render every other line in high-res
-    //  480 vertical mode, or, optionally, force it for all video modes)
-
-    if (gpu.screen.vres == 480) {
-      if (gpu_unai.config.ilace_force) {
-        gpu_unai.ilace_mask = 3; // Only need 1/4 of lines
-      } else {
-        gpu_unai.ilace_mask = 1; // Only need 1/2 of lines
-      }
-    } else {
-      // Vert resolution changed from 480 to lower one
-      gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
-    }
-  } else {
+	    if (gpu.screen.vres == 480) {
+	      if (gpu_unai.config.half_res) {
+	        gpu_unai.ilace_mask = 1; // Every other field (half the lines)
+	      } else if (gpu_unai.config.ilace_force) {
+	        gpu_unai.ilace_mask = 3; // Only need 1/4 of lines
+	      } else {
+	        gpu_unai.ilace_mask = 1; // Only need 1/2 of lines
+	      }
+	    } else {
+	      // Vert resolution changed from 480 to lower one
+	      if (gpu_unai.config.half_res)
+	        gpu_unai.ilace_mask = 1; // 240p: skip every other line
+	      else
+	        gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
+	    }  } else {
     gpu_unai.ilace_mask = 0;
   }
+
+  /* Let vout_update() compact the same lines the rasterizers skipped. */
+  gpu_out_ilace_mask = gpu_unai.ilace_mask;
 
   /*
   printf("res change hres: %d   vres: %d   depth: %d   ilace_mask: %d\n",
