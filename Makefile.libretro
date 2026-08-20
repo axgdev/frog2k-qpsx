@@ -83,7 +83,7 @@ MORE_CFLAGS = -Os -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
 	-D$(shell echo $(GPU) | tr a-z A-Z) \
 	-D$(shell echo $(SPU) | tr a-z A-Z)
 else
-MORE_CFLAGS = -O3 -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
+MORE_CFLAGS = -O2 -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
 	-Isrc/plugin_lib \
 	-Isrc/port/$(PORT) \
 	-Ilibretro/core -Ilibretro/include \
