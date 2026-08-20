@@ -527,7 +527,9 @@ void vout_update(void)
 		} break;
 	}
 
-	gpu_out_height = (out_lines > 0) ? out_lines : gpu.screen.h;
+	/* With line-skipping the output rows are compacted; without it the
+	 * port presents its full fixed-height buffer exactly as before. */
+	gpu_out_height = li ? out_lines : 0;
 
 	video_flip();
 }
