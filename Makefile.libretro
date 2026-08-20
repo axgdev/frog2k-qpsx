@@ -180,15 +180,19 @@ OBJS += \
 	src/gpu/gpulib/gpu.o \
 	src/gpu/gpulib/vout_port.o
 
-# QPSX v091: MIPS32 Assembly optimizations (SF2000 only)
+# QPSX v091: MIPS32 Assembly optimizations (SF2000 bare-metal only)
 # QPSX v099: Added psxmem_asm.o for memory write optimization
 ifeq ($(platform), sf2000)
 OBJS += \
 	src/gte_asm.o \
 	src/psxmem_asm.o
+endif
+# HC15xx-safe MIPS32r2 GPU inner loops (EXT/INS/MOVZ/PREF only, see
+# gpu_inner_mips32.h): built for every MIPS frontend that licenses the safe
+# subset.  These ops are confirmed working on the physical HC15xx while the
+# buggy r2 encodings (ROTR/SEB/SEH/WSBH/SYNCI/JR.HB) are never emitted.
 ifeq ($(QPSX_ENABLE_MIPS32R2), 1)
 OBJS += src/gpu/$(GPU)/gpu_inner_mips32.o
-endif
 endif
 
 # SPU - pcsxrearmed with libretro audio backend

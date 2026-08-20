@@ -29,7 +29,7 @@
  * Set to 1 to enable profiling (adds overhead to every mem access)
  * Set to 0 for production builds (zero overhead)
  */
-#define QPSX_PROFILER_ENABLED 0
+#define QPSX_PROFILER_ENABLED 1
 
 #include <stdint.h>
 

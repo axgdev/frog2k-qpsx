@@ -22,8 +22,16 @@
  * along with it.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// Mips32r2 introduced useful instructions:
-#if (defined(__mips_isa_rev) && (__mips_isa_rev >= 2)) || \
+// Mips32r2 introduced useful instructions.
+//
+// HC15xx (SF2000/GB300) is MIPS32r1 with only a subset of r2 working
+// (EXT/INS/CLZ/CLO/MOVN/MOVZ/madd; NOT rotr/seb/seh/wsbh/synci/jr.hb).
+// The host build uses -march=mips32, so __mips_isa_rev is 1 below and no
+// CACHE_OPS (synci) code is emitted.  QPSX_MIPS32R2_SAFE licenses the
+// proven-good EXT/INS encodings only; CACHE_OPS must stay off.
+#if defined(QPSX_MIPS32R2_SAFE)
+#define HAVE_MIPS32R2_EXT_INS
+#elif (defined(__mips_isa_rev) && (__mips_isa_rev >= 2)) || \
     (defined(_MIPS_ARCH_MIPS32R2) || defined(_MIPS_ARCH_MIPS32R3) || \
      defined(_MIPS_ARCH_MIPS32R5) || defined(_MIPS_ARCH_MIPS32R6))
 #define HAVE_MIPS32R2_EXT_INS

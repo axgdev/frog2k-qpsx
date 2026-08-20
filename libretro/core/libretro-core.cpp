@@ -3622,6 +3622,9 @@ void retro_init(void)
     /* v377b: Reset average FPS tracking */
     fps_history_idx = 0;
     fps_history_count = 0;
+
+    profiler_init();
+    profiler_set_enabled(1);
     fps_avg_x100 = 0;
     for (int i = 0; i < FPS_AVG_SAMPLES; i++) fps_history[i] = 0;
 
@@ -3854,18 +3857,39 @@ void retro_run(void)
 
     if (g_target_speed >= 100) {
         /* Normal speed - no throttling, just execute */
+        profiler_frame_start();
         psxCpu->Execute();
+        profiler_frame_end();
     } else {
         frame_throttle_acc += g_target_speed;
         if (frame_throttle_acc >= 100) {
             frame_throttle_acc -= 100;
             /* Emulate this frame */
+            profiler_frame_start();
             psxCpu->Execute();
+            profiler_frame_end();
         } else {
             /* Skip emulation - frame dupe (output previous frame buffer) */
             if (SCREEN && real_video_cb) {
                 real_video_cb(SCREEN, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
             }
+        }
+    }
+
+    /* v<prof>: dump the emulated-cycle breakdown every 60 frames */
+    if ((run_frame_count % 60) == 0) {
+        const ProfilerData *pd = profiler_get_data();
+        if (pd && pd->enabled && pd->frame_count > 0) {
+            XLOG("PROF total=%.2fms cpu=%.1f%% gte=%.1f%% gpu=%.1f%% spu=%.1f%% cd=%.1f%% video=%.1f%%",
+                pd->avg_ms[PROF_FRAME_TOTAL],
+                pd->pct[PROF_CPU_TOTAL], pd->pct[PROF_GTE_TOTAL],
+                pd->pct[PROF_GPU_TOTAL], pd->pct[PROF_SPU_TOTAL],
+                pd->pct[PROF_CDROM_TOTAL], pd->pct[PROF_VIDEO_OUTPUT]);
+            XLOG("PROF rtp=%u rtps=%u mvmva=%u nclip=%u",
+                pd->cycles[PROF_GTE_RTPT] / pd->frame_count,
+                pd->cycles[PROF_GTE_RTPS] / pd->frame_count,
+                pd->cycles[PROF_GTE_MVMVA] / pd->frame_count,
+                pd->cycles[PROF_GTE_NCLIP] / pd->frame_count);
         }
     }
 }

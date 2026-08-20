@@ -8,9 +8,15 @@
  * Options that can be disabled for debugging: *
  ***********************************************/
 
-/* Convert various MIPS I opcode sequences to a modern opcode */
+/* Convert various MIPS I opcode sequences to a modern opcode.  The
+ * SEB/SEH sign-extension conversions require HAVE_MIPS32R2_SEB_SEH, which
+ * is buggy on the HC15xx r1 core; the EXT/INS conversions only need the
+ * working EXT/INS pair, so they are gated separately. */
 #if defined(HAVE_MIPS32R2_EXT_INS) && defined(HAVE_MIPS32R2_SEB_SEH)
 #define USE_MIPS32R2_ALU_OPCODE_CONVERSION
+#endif
+#if defined(HAVE_MIPS32R2_EXT_INS)
+#define USE_MIPS32R2_ALU_OPCODE_EXT_INS_CONVERSION
 #endif
 
 
@@ -416,6 +422,13 @@ static void recSLL()
 			// Success.. we're done
 			return;
 		}
+	}
+#endif // USE_MIPS32R2_ALU_OPCODE_CONVERSION (SEB/SEH conversion needs buggy SEB/SEH)
+
+#ifdef USE_MIPS32R2_ALU_OPCODE_EXT_INS_CONVERSION
+	if (!branch)
+	{
+		const u32 next_opcode = OPCODE_AT(pc);
 
 		// If next opcode is SRL, see if we can convert this SLL,SRL sequence
 		//  into a newer MIPS32r2 'INS' instruction instead (inserting 0s).
@@ -461,7 +474,7 @@ static void recSLL()
 			return;
 		}
 	}
-#endif // USE_MIPS32R2_ALU_OPCODE_CONVERSION
+#endif // USE_MIPS32R2_ALU_OPCODE_EXT_INS_CONVERSION
 
 	REC_RTYPE_RD_RT_SA(SLL, _Rd_, _Rt_, _Sa_);
 
@@ -475,7 +488,7 @@ static void recSRL()
 
 	const bool set_const = IsConst(_Rt_);
 
-#ifdef USE_MIPS32R2_ALU_OPCODE_CONVERSION
+#ifdef USE_MIPS32R2_ALU_OPCODE_EXT_INS_CONVERSION
 	if (!branch)
 	{
 		const u32 next_opcode = OPCODE_AT(pc);
@@ -579,7 +592,7 @@ static void recSRL()
 			return;
 		}
 	}
-#endif // USE_MIPS32R2_ALU_OPCODE_CONVERSION
+#endif // USE_MIPS32R2_ALU_OPCODE_EXT_INS_CONVERSION
 
 	REC_RTYPE_RD_RT_SA(SRL, _Rd_, _Rt_, _Sa_);
 
@@ -594,7 +607,7 @@ static void recSRA()
 
 	const bool set_const = IsConst(_Rt_);
 
-#ifdef USE_MIPS32R2_ALU_OPCODE_CONVERSION
+#ifdef USE_MIPS32R2_ALU_OPCODE_EXT_INS_CONVERSION
 	if (!branch)
 	{
 		const u32 next_opcode = OPCODE_AT(pc);
@@ -643,7 +656,7 @@ static void recSRA()
 			return;
 		}
 	}
-#endif // USE_MIPS32R2_ALU_OPCODE_CONVERSION
+#endif // USE_MIPS32R2_ALU_OPCODE_EXT_INS_CONVERSION
 
 	REC_RTYPE_RD_RT_SA(SRA, _Rd_, _Rt_, _Sa_);
 

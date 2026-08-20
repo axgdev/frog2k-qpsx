@@ -112,8 +112,18 @@ typedef enum {
 /* XXX: encoding of 3-op MUL changed in MIPS32r6, but hasn't been updated here. */
 #define HAVE_MIPS32_3OP_MUL
 
-// MIPS32r2 introduced useful instructions:
-#if (defined(__mips_isa_rev) && (__mips_isa_rev >= 2)) || \
+// MIPS32r2 introduced useful instructions.
+//
+// The HC15xx (SF2000/GB300) CPU implements MIPS32r1 and only a subset of
+// r2.  Field report from physical hardware (frog-toolchain PR #3): EXT, INS,
+// CLZ, CLO, MOVN, MOVZ and the multiply-accumulate ops work, while ROTR/
+// ROTRV, SEB/SEH, WSBH, SYNCI and JR.HB/JALR.HB raise exceptions.  The host
+// is always compiled with -march=mips32 (r1) so GCC never emits a buggy op;
+// QPSX_MIPS32R2_SAFE additionally licenses the proven-good EXT/INS encodings
+// emitted by this code generator (EXT/INS macros write raw words).
+#if defined(QPSX_MIPS32R2_SAFE)
+ #define HAVE_MIPS32R2_EXT_INS
+#elif (defined(__mips_isa_rev) && (__mips_isa_rev >= 2)) || \
     (defined(_MIPS_ARCH_MIPS32R2) || defined(_MIPS_ARCH_MIPS32R3) || \
      defined(_MIPS_ARCH_MIPS32R5) || defined(_MIPS_ARCH_MIPS32R6))
  #define HAVE_MIPS32R2_EXT_INS

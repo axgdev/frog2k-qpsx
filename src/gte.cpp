@@ -21,6 +21,7 @@
 
 #include "gte.h"
 #include "psxmem.h"
+#include "profiler.h"
 
 // MIPS platforms have hardware divider, faster than 64KB LUT + UNR algo
 #if defined(__mips__)
@@ -402,6 +403,7 @@ void gteRTPS(void) {
 #ifdef GTE_LOG
 	GTE_LOG("GTE RTPS\n");
 #endif
+	PROFILE_START(PROF_GTE_RTPS);
 	gteFLAG = 0;
 
 	gteMAC1 = A1((((s64)gteTRX << 12) + (gteR11 * gteVX0) + (gteR12 * gteVY0) + (gteR13 * gteVZ0)) >> 12);
@@ -427,6 +429,7 @@ void gteRTPS(void) {
 	s64 tmp = (s64)gteDQB + ((s64)gteDQA * quotient);
 	gteMAC0 = F(tmp);
 	gteIR0 = limH(tmp >> 12);
+	PROFILE_END(PROF_GTE_RTPS);
 }
 
 void gteRTPT(void) {
@@ -437,6 +440,7 @@ void gteRTPT(void) {
 #ifdef GTE_LOG
 	GTE_LOG("GTE RTPT\n");
 #endif
+	PROFILE_START(PROF_GTE_RTPT);
 	gteFLAG = 0;
 
 	gteSZ0 = gteSZ3;
@@ -460,6 +464,7 @@ void gteRTPT(void) {
 	s64 tmp = (s64)gteDQB + ((s64)gteDQA * quotient);
 	gteMAC0 = F(tmp);
 	gteIR0 = limH(tmp >> 12);
+	PROFILE_END(PROF_GTE_RTPT);
 }
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
@@ -476,6 +481,7 @@ void gteMVMVA(u32 gteop) {
 #ifdef GTE_LOG
 	GTE_LOG("GTE MVMVA\n");
 #endif
+	PROFILE_START(PROF_GTE_MVMVA);
 	gteFLAG = 0;
 
 	gteMAC1 = A1((((s64)CV1(cv) << 12) + (MX11(mx) * vx) + (MX12(mx) * vy) + (MX13(mx) * vz)) >> shift);
@@ -485,17 +491,20 @@ void gteMVMVA(u32 gteop) {
 	gteIR1 = limB1(gteMAC1, lm);
 	gteIR2 = limB2(gteMAC2, lm);
 	gteIR3 = limB3(gteMAC3, lm);
+	PROFILE_END(PROF_GTE_MVMVA);
 }
 
 void gteNCLIP(void) {
 #ifdef GTE_LOG
 	GTE_LOG("GTE NCLIP\n");
 #endif
+	PROFILE_START(PROF_GTE_NCLIP);
 	gteFLAG = 0;
 
 	gteMAC0 = F((s64)gteSX0 * (gteSY1 - gteSY2) +
 				gteSX1 * (gteSY2 - gteSY0) +
 				gteSX2 * (gteSY0 - gteSY1));
+	PROFILE_END(PROF_GTE_NCLIP);
 }
 
 void gteAVSZ3(void) {
