@@ -102,7 +102,7 @@ int renderer_init(void)
   // sprite-span functions, perhaps unnecessarily. No Abe Oddysey hack was
   // present in latest PCSX4ALL sources we were using.
   //gpu_unai.config.enableAbbeyHack = gpu_unai_config_ext.abe_hack;
-  gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
+  gpu_unai.ilace_mask = GpuEffectiveIlaceMask();
   GPUIF_LOG("Config set OK");
 
 #ifdef GPU_UNAI_USE_INT_DIV_MULTINV
@@ -263,8 +263,9 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
   uint32_t *list_end = list + list_len;
 
   //TODO: set ilace_mask when resolution changes instead of every time,
-  // eliminate #ifdef below.
-  gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
+  // eliminate #ifdef below. QPSX: fold half_res in here too, otherwise
+  // this per-list reset clobbers the res-change mask before rasterization.
+  gpu_unai.ilace_mask = GpuEffectiveIlaceMask();
 
 #ifdef HAVE_PRE_ARMV7 /* XXX */
   gpu_unai.ilace_mask |= gpu.status.interlace;

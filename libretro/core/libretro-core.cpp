@@ -38,6 +38,7 @@
 
 #include "libretro.h"
 #include "port.h"
+
 #include "profiler.h"
 #include "cdriso.h"  /* v258: CDDA conversion functions */
 #include "plugin_lib/plugin_lib.h"  /* QPSX_280: For pl_init() */
@@ -3880,16 +3881,23 @@ void retro_run(void)
     if ((run_frame_count % 60) == 0) {
         const ProfilerData *pd = profiler_get_data();
         if (pd && pd->enabled && pd->frame_count > 0) {
-            XLOG("PROF total=%.2fms cpu=%.1f%% gte=%.1f%% gpu=%.1f%% spu=%.1f%% cd=%.1f%% video=%.1f%%",
+            XLOG("PROF f=%d total=%.2fms cpu=%.1f%% gte=%.1f%% gpu=%.1f%% (poly=%.1f%% spr=%.1f%% vram=%.1f%%) spu=%.1f%% cd=%.1f%% video=%.1f%%",
+                run_frame_count,
                 pd->avg_ms[PROF_FRAME_TOTAL],
                 pd->pct[PROF_CPU_TOTAL], pd->pct[PROF_GTE_TOTAL],
-                pd->pct[PROF_GPU_TOTAL], pd->pct[PROF_SPU_TOTAL],
+                pd->pct[PROF_GPU_TOTAL],
+                pd->pct[PROF_GPU_POLY], pd->pct[PROF_GPU_SPRITE], pd->pct[PROF_GPU_VRAM],
+                pd->pct[PROF_SPU_TOTAL],
                 pd->pct[PROF_CDROM_TOTAL], pd->pct[PROF_VIDEO_OUTPUT]);
             XLOG("PROF rtp=%u rtps=%u mvmva=%u nclip=%u",
                 pd->cycles[PROF_GTE_RTPT] / pd->frame_count,
                 pd->cycles[PROF_GTE_RTPS] / pd->frame_count,
                 pd->cycles[PROF_GTE_MVMVA] / pd->frame_count,
                 pd->cycles[PROF_GTE_NCLIP] / pd->frame_count);
+            XLOG("PROF cpu comp=%.1f%% memr=%.1f%% memw=%.1f%% exc=%.1f%% bios=%.1f%% icache=%.1f%%",
+                pd->pct[PROF_CPU_COMPILE], pd->pct[PROF_CPU_MEM_READ],
+                pd->pct[PROF_CPU_MEM_WRITE], pd->pct[PROF_CPU_EXCEPTION],
+                pd->pct[PROF_CPU_BIOS], pd->pct[PROF_CPU_ICACHE]);
         }
     }
 }

@@ -1021,9 +1021,33 @@ static void general_loads_stores(const int  count,
 						MOV(MIPSREG_A1, rt); // <BD> Branch delay slot
 						break;
 					case 0xac000000: // SW
-						ADDIU(MIPSREG_A0, rs, op_imm);
-						JAL(write_func[WIDTH_32]);
-						MOV(MIPSREG_A1, rt); // <BD> Branch delay slot
+						// QPSX scratchpad fast path: 0x1f80_0000..0x1f80_03ff maps
+						// to psxH[addr & 0xffff] (scratchpad is the hot GPU-FIFO
+						// region for PS1 3D games). The helper-call fallback below
+						// still handles hardware registers and mirror regions.
+						{
+							u32 *label_slow_1 = 0, *label_slow_2 = 0, *label_done = 0;
+							ADDIU(MIPSREG_A0, rs, op_imm);       // eff addr (also the helper arg)
+							SRL(TEMP_1, MIPSREG_A0, 16);         // t = addr >> 16
+							XORI(TEMP_1, TEMP_1, 0x1f80);        // t == 0x1f80 ?
+							label_slow_1 = (u32 *)recMem;
+							BNE(TEMP_1, 0, 0);                   // not the scratchpad/hw region
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);    // <BD> m = addr & 0xffff
+							SLTIU(TEMP_3, TEMP_2, 0x400);         // m < 0x400 (scratchpad)?
+							label_slow_2 = (u32 *)recMem;
+							BEQZ(TEMP_3, 0);                     // hardware regs -> helper
+							LUI(TEMP_3, ADR_HI((uptr)psxH));     // <BD> psxH high half
+							ADDU(TEMP_3, TEMP_3, TEMP_2);         // psxH + m
+							LSU_OPCODE(0xac000000, rt, TEMP_3, ADR_LO((uptr)psxH)); // SW rt, lo(psxH)(temp_3)
+							label_done = (u32 *)recMem;
+							B(0);                                // b done
+							NOP();                               // <BD>
+							fixup_branch(label_slow_1);
+							fixup_branch(label_slow_2);
+							JAL(write_func[WIDTH_32]);           // helper: addr already in $a0
+							MOV(MIPSREG_A1, rt);                 // <BD> value arg
+							fixup_branch(label_done);
+						}
 						break;
 					case 0xa8000000: // SWL
 					case 0xb8000000: // SWR
@@ -1145,10 +1169,31 @@ static void general_loads_stores(const int  count,
 						}
 						break;
 					case 0x8c000000: // LW
-						JAL(read_func[WIDTH_32]);   // result in MIPSREG_V0
-						ADDIU(MIPSREG_A0, rs, op_imm); // <BD> Branch delay slot
-						if (op_rt) {
-							MOV(rt, MIPSREG_V0);
+						// QPSX scratchpad fast path (see the SW case above).
+						{
+							u32 *label_slow_1 = 0, *label_slow_2 = 0, *label_done = 0;
+							ADDIU(MIPSREG_A0, rs, op_imm);       // eff addr (also the helper arg)
+							SRL(TEMP_1, MIPSREG_A0, 16);         // t = addr >> 16
+							XORI(TEMP_1, TEMP_1, 0x1f80);        // t == 0x1f80 ?
+							label_slow_1 = (u32 *)recMem;
+							BNE(TEMP_1, 0, 0);                   // not the scratchpad/hw region
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);    // <BD> m = addr & 0xffff
+							SLTIU(TEMP_3, TEMP_2, 0x400);         // m < 0x400 (scratchpad)?
+							label_slow_2 = (u32 *)recMem;
+							BEQZ(TEMP_3, 0);                     // hardware regs -> helper
+							LUI(TEMP_3, ADR_HI((uptr)psxH));     // <BD> psxH high half
+							ADDU(TEMP_3, TEMP_3, TEMP_2);         // psxH + m
+							LSU_OPCODE(0x8c000000, rt, TEMP_3, ADR_LO((uptr)psxH)); // LW rt, lo(psxH)(temp_3)
+							label_done = (u32 *)recMem;
+							B(0);                                // b done
+							NOP();                               // <BD>
+							fixup_branch(label_slow_1);
+							fixup_branch(label_slow_2);
+							JAL(read_func[WIDTH_32]);            // helper: addr already in $a0
+							NOP();                               // <BD> (result not ready yet)
+							if (op_rt)
+								MOV(rt, MIPSREG_V0);
+							fixup_branch(label_done);
 						}
 						break;
 					case 0x88000000: // LWL

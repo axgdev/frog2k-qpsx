@@ -1,0 +1,5 @@
+QPSX_PLATFORM=linux
+QPSX_ENABLE_MIPS32R2=0
+CC=/usr/bin/ccache /root/sf2000_linux_frontend/.toolchains/frog-toolchain-v1.3.2-uclibc-arm64/mipsel-unknown-linux-uclibc/bin/mipsel-unknown-linux-uclibc-gcc
+CXX=/usr/bin/ccache /root/sf2000_linux_frontend/.toolchains/frog-toolchain-v1.3.2-uclibc-arm64/mipsel-unknown-linux-uclibc/bin/mipsel-unknown-linux-uclibc-g++
+AR=/root/sf2000_linux_frontend/.toolchains/frog-toolchain-v1.3.2-uclibc-arm64/mipsel-unknown-linux-uclibc/bin/mipsel-unknown-linux-uclibc-ar

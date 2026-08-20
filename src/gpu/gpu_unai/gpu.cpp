@@ -108,7 +108,7 @@ static void gpuReset(void)
 
 	// Configuration options
 	gpu_unai.config = gpu_unai_config_ext;
-	gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
+	gpu_unai.ilace_mask = GpuEffectiveIlaceMask();
 	gpu_unai.frameskip.skipCount = gpu_unai.config.frameskip_count;
 
 	SetupLightLUT();

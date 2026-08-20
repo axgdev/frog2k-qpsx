@@ -18,6 +18,8 @@
 *   51 Franklin Street, Fifth Floor, Boston, MA 02111-1307 USA.           *
 ***************************************************************************/
 
+#include "profiler.h"
+
 //senquack - NOTE: GPU Unai poly routines have been rewritten/adapted
 // from DrHell routines to fix multiple issues. See README_senquack.txt
 
@@ -214,6 +216,7 @@ gpuDrawPolyF - Flat-shaded, untextured poly
 ----------------------------------------------------------------------*/
 void gpuDrawPolyF(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_quad)
 {
+	PROFILE_START(PROF_GPU_POLY);
 	// Set up bgr555 color to be used across calls in inner driver
 	gpu_unai.PixelData = GPU_RGB16(packet.U4[0]);
 
@@ -358,6 +361,7 @@ void gpuDrawPolyF(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_quad
 			}
 		}
 	} while (++cur_pass < total_passes);
+	PROFILE_END(PROF_GPU_POLY);
 }
 
 /*----------------------------------------------------------------------
@@ -365,6 +369,7 @@ gpuDrawPolyFT - Flat-shaded, textured poly
 ----------------------------------------------------------------------*/
 void gpuDrawPolyFT(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_quad)
 {
+	PROFILE_START(PROF_GPU_POLY);
 	// r8/g8/b8 used if texture-blending & dithering is applied (24-bit light)
 	gpu_unai.r8 = packet.U1[0];
 	gpu_unai.g8 = packet.U1[1];
@@ -691,6 +696,7 @@ void gpuDrawPolyFT(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_qua
 			}
 		}
 	} while (++cur_pass < total_passes);
+	PROFILE_END(PROF_GPU_POLY);
 }
 
 /*----------------------------------------------------------------------
@@ -698,6 +704,7 @@ gpuDrawPolyG - Gouraud-shaded, untextured poly
 ----------------------------------------------------------------------*/
 void gpuDrawPolyG(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_quad)
 {
+	PROFILE_START(PROF_GPU_POLY);
 	PolyVertex vbuf[4];
 	polyInitVertexBuffer(vbuf, packet, POLYTYPE_G, is_quad);
 
@@ -1039,6 +1046,7 @@ void gpuDrawPolyG(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_quad
 			}
 		}
 	} while (++cur_pass < total_passes);
+	PROFILE_END(PROF_GPU_POLY);
 }
 
 /*----------------------------------------------------------------------
@@ -1046,6 +1054,7 @@ gpuDrawPolyGT - Gouraud-shaded, textured poly
 ----------------------------------------------------------------------*/
 void gpuDrawPolyGT(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_quad)
 {
+	PROFILE_START(PROF_GPU_POLY);
 	PolyVertex vbuf[4];
 	polyInitVertexBuffer(vbuf, packet, POLYTYPE_GT, is_quad);
 
@@ -1445,4 +1454,5 @@ void gpuDrawPolyGT(const PtrUnion packet, const PP gpuPolySpanDriver, u32 is_qua
 			}
 		}
 	} while (++cur_pass < total_passes);
+	PROFILE_END(PROF_GPU_POLY);
 }
