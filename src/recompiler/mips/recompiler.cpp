@@ -87,6 +87,13 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_MIPS_FAST_MEM_CONVERT
 #define QPSX_MIPS_FAST_MEM_CONVERT 0
 #endif
+/* Propagate the existing fuzzy PS1-address classification through ADDIU.
+ * This is deliberately opt-in: the older ADDU heuristic only records a
+ * broad region (not an interval), so a physical A/B must confirm that the
+ * extra range-check elisions do not encounter deliberately wrapping code. */
+#ifndef QPSX_MIPS_PROPAGATE_FUZZY_ADDR
+#define QPSX_MIPS_PROPAGATE_FUZZY_ADDR 0
+#endif
 /* Keep the indirect-return target in $ra across blocks that contain no C
  * helper call.  The old loop reloaded the same stack value in every block's
  * jump delay slot, even though the recompiler already restores $ra only when

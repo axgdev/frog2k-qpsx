@@ -86,6 +86,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_MIPS_FAST_MEM_CONVERT
 #define QPSX_MIPS_FAST_MEM_CONVERT 0
 #endif
+#ifndef QPSX_MIPS_PROPAGATE_FUZZY_ADDR
+#define QPSX_MIPS_PROPAGATE_FUZZY_ADDR 0
+#endif
 #ifndef QPSX_GPU_LINEAR_4BPP
 #define QPSX_GPU_LINEAR_4BPP 0
 #endif
@@ -176,6 +179,8 @@ int psxInit() {
 	     QPSX_GPU_HOT_DRIVER_ORDER,
 	     QPSX_GPU_RUNTIME_METRICS, QPSX_MIPS_VIRTUAL_MIRRORING,
 	     QPSX_MIPS_FAST_MEM_CONVERT);
+	xlog("QPSX: mips_opts fuzzy_addiu=%d",
+	     QPSX_MIPS_PROPAGATE_FUZZY_ADDR);
 	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d",
 	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
 	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,

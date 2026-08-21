@@ -48,6 +48,11 @@ static void recADDIU()
 	// rt = rs + (s32)imm
 
 	const bool set_const = IsConst(_Rs_);
+#if QPSX_MIPS_PROPAGATE_FUZZY_ADDR
+	const bool fuzzy_ram_addr = IsFuzzyRamAddr(_Rs_);
+	const bool fuzzy_nonram_addr = IsFuzzyNonramAddr(_Rs_);
+	const bool fuzzy_scratchpad_addr = IsFuzzyScratchpadAddr(_Rs_);
+#endif
 
 	/* Catch ADDIU reg, $0, imm */
 	/* Exit if const already loaded */
@@ -58,6 +63,18 @@ static void recADDIU()
 
 	if (set_const)
 		SetConst(_Rt_, GetConst(_Rs_) + (s32)_Imm_);
+#if QPSX_MIPS_PROPAGATE_FUZZY_ADDR
+	/* The existing fuzzy analysis intentionally trades a precise interval for
+	 * a cheap region bit.  Keep this extension behind a build switch so the
+	 * compatibility matrix can reject games that use a wrapping pointer
+	 * arithmetic sequence. */
+	if (fuzzy_ram_addr)
+		SetFuzzyRamAddr(_Rt_);
+	if (fuzzy_nonram_addr)
+		SetFuzzyNonramAddr(_Rt_);
+	if (fuzzy_scratchpad_addr)
+		SetFuzzyScratchpadAddr(_Rt_);
+#endif
 }
 static void recADDI() { recADDIU(); }
 
