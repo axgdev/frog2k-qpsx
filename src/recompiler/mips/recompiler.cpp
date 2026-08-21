@@ -112,6 +112,12 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_MIPS_DISPATCH_CACHE_GP
 #define QPSX_MIPS_DISPATCH_CACHE_GP 0
 #endif
+#ifndef QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI
+#define QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI 0
+#endif
+#if QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI && !QPSX_MIPS_DISPATCH_CACHE_GP
+#error "QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI requires QPSX_MIPS_DISPATCH_CACHE_GP"
+#endif
 
 /* MIPS32r1 branch-likely instructions annul their delay slot when the
  * common cache-hit condition is false.  The dispatch loop uses this to avoid
@@ -1073,7 +1079,7 @@ __asm__ __volatile__ (
 #if QPSX_MIPS_PERSISTENT_RETURN_RA
 "lw    $ra, f_off_block_ret_addr($sp)          \n" // psxBranchTest clobbered $ra
 #endif
-#if QPSX_MIPS_DISPATCH_CACHE_GP
+#if QPSX_MIPS_DISPATCH_CACHE_GP && !QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI
 "lw    $gp, f_off_dispatch_cache($sp)          \n" // Defensive reload across helper calls
 #endif
 // QPSX_039: Check emu_frame_complete flag - exit if frame is done
@@ -1101,7 +1107,7 @@ __asm__ __volatile__ (
 #if QPSX_MIPS_PERSISTENT_RETURN_RA
 "lw    $ra, f_off_block_ret_addr($sp)          \n" // recRecompile clobbered $ra
 #endif
-#if QPSX_MIPS_DISPATCH_CACHE_GP
+#if QPSX_MIPS_DISPATCH_CACHE_GP && !QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI
 "lw    $gp, f_off_dispatch_cache($sp)          \n" // Defensive reload across helper calls
 #endif
 "lw    $t2, f_off_temp_var1($sp)              \n" // Restore block ptr upon return
