@@ -140,11 +140,7 @@ static noinline void decide_frameskip(void)
   }
 }
 
-#if QPSX_GPU_DMA_CHAIN_FAST
-noinline int decide_frameskip_allow(uint32_t cmd_e3)
-#else
 static noinline int decide_frameskip_allow(uint32_t cmd_e3)
-#endif
 {
   // no frameskip if it decides to draw to display area,
   // but not for interlace since it'll most likely always do that
