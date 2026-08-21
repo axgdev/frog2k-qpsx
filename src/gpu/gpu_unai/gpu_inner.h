@@ -540,80 +540,43 @@ qpsx_gpu_poly_span_4bpp_fullmask(const gpu_unai_t &gpu_unai,
 
 // QPSX v091: MIPS32 Assembly optimizations
 #include "gpu_inner_mips32.h"
+#include "gpu_poly2043_fast.h"
 
 #if QPSX_GPU_POLY_2043_FAST
 /*
  * Compact specialization for the measured 16bpp Gouraud polygon driver.
  *
  * CF 2043 is: lighting + blending mode 3 + 16bpp texture + Gouraud + mask
- * set + dithering + display blit mask.  Keeping this as a separate function
- * is important on the HC15xx: the ordinary template remains small and this
- * large, but single-purpose loop does not replicate its runtime decisions.
- * Every operation below is copied from the CF=2043 arm of gpuPolySpanFn;
- * the only changed representation is carrying the already-known VRAM index
- * for dithering instead of subtracting two pointers on every pixel.
+ * set + dithering + display blit mask.  The loop itself lives in
+ * gpu_poly2043_fast.h and is always inlined into this CF-specific template
+ * instantiation.  The ordinary template remains small, while this
+ * single-purpose loop does not replicate its runtime decisions.  Every
+ * operation is copied from the CF=2043 arm of gpuPolySpanFn; the changed
+ * representation carries the scanline-local dither/blit X instead of
+ * deriving it from a destination pointer per pixel.
  */
-#if defined(__GNUC__)
-#define QPSX_GPU_POLY_2043_NOINLINE __attribute__((noinline))
-#else
-#define QPSX_GPU_POLY_2043_NOINLINE
-#endif
-static QPSX_GPU_POLY_2043_NOINLINE void
-qpsx_gpu_poly_span_2043(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
-{
-	u32 l_u = gpu_unai.u & gpu_unai.u_msk;
-	u32 l_v = gpu_unai.v & gpu_unai.v_msk;
-	const u32 l_u_msk = gpu_unai.u_msk;
-	const u32 l_v_msk = gpu_unai.v_msk;
-	const s32 l_u_inc = gpu_unai.u_inc;
-	const s32 l_v_inc = gpu_unai.v_inc;
-	const u16 *texture = gpu_unai.TBA;
-	u32 l_gCol = gpu_unai.gCol;
-	const u32 l_gInc = gpu_unai.gInc;
-	const u8 blit_mask = gpu_unai.blit_mask;
-	/* The original quantizer intentionally truncates the VRAM index to u16. */
-	u16 fbpos = (u16)(u32)(pDst - gpu_unai.vram);
-	uintptr_t dst_addr = (uintptr_t)pDst;
-	if (!count)
-		return;
-
-	do {
-		if ((blit_mask >> ((dst_addr >> 1) & 7)) & 1u)
-			goto skip;
-
-		{
-			const u16 texel = texture[(l_u >> FIXED_BITS) +
-							  (l_v & (0xffu << FIXED_BITS))];
-			u16 src;
-			u32 src24;
-
-			if (!texel)
-				goto skip;
-
-			/* CF=2043 is always Gouraud + dither. */
-			src = texel & 0x8000;
-			src24 = gpuLightingTXT24Gouraud(texel, l_gCol);
-			if (src) {
+struct qpsx_gpu_poly2043_light_policy {
+	GPU_INLINE u32 apply(u16 texel, u32 g_col)
+	{
+		return gpuLightingTXT24Gouraud(texel, g_col);
+	}
+};
+struct qpsx_gpu_poly2043_blend_policy {
+	GPU_INLINE u32 apply(u32 src24, u16 dst)
+	{
 #if QPSX_GPU_FIXED_FAST_PATH
-				src24 = gpuBlending24Fast_Mode3(src24, *pDst);
+		return gpuBlending24Fast_Mode3(src24, dst);
 #else
-				src24 = gpuBlending24<3>(src24, *pDst);
+		return gpuBlending24<3>(src24, dst);
 #endif
-			}
-			src = gpuColorQuantization24At<1>(src24, gpu_unai, fbpos);
-			*pDst = src | 0x8000;
-		}
-
-skip:
-		++pDst;
-		dst_addr += sizeof(u16);
-		fbpos = (u16)(fbpos + 1u);
-		l_u = (l_u + l_u_inc) & l_u_msk;
-		l_v = (l_v + l_v_inc) & l_v_msk;
-		l_gCol += l_gInc;
-	} while (--count);
-}
-#undef QPSX_GPU_POLY_2043_NOINLINE
+	}
+};
+struct qpsx_gpu_poly2043_quant_policy {
+	GPU_INLINE u16 apply(u32 src24, u32 dither)
+	{
+		return gpuColorQuantization24WithDither<1>(src24, dither);
+	}
+};
 #endif
 
 #if QPSX_GPU_LINEAR_4BPP
@@ -1501,7 +1464,10 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 #endif
 #if QPSX_GPU_POLY_2043_FAST
 	if (CF == 2043) {
-		qpsx_gpu_poly_span_2043(gpu_unai, pDst, count);
+		qpsx_gpu_poly_span_2043_fast<gpu_unai_t,
+				qpsx_gpu_poly2043_light_policy,
+				qpsx_gpu_poly2043_blend_policy,
+				qpsx_gpu_poly2043_quant_policy>(gpu_unai, pDst, count);
 		return;
 	}
 #endif
