@@ -34,6 +34,13 @@ extern retro_environment_t environ_cb;
 
 extern volatile int skip_video_output;
 
+/* Linux's static frontend exports this optional zero-copy presenter.  The
+ * weak reference keeps the ordinary libretro port usable on UniFrog and on
+ * host builds where no GE presenter exists. */
+extern "C" void sf2000_video_vram(const void *data, unsigned width,
+                                  unsigned height, size_t pitch)
+    __attribute__((weak));
+
 /* v295: GPU frame counter - counts ACTUAL rendered frames (not skipped/duped) */
 volatile int gpu_frame_count = 0;
 
@@ -126,6 +133,23 @@ void video_flip_framebuffer(const unsigned short *buffer)
         gpu_frame_count++;
         video_cb(buffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
     }
+}
+
+int video_flip_vram(const unsigned short *buffer, unsigned width,
+                    unsigned height, size_t pitch)
+{
+    if (!sf2000_video_vram || !buffer || !width || !height)
+        return 0;
+    if (skip_video_output) {
+        /* Keep libretro's frame-duplication accounting and pacing semantics;
+         * the frontend has no source surface to submit for this frame. */
+        if (video_cb)
+            video_cb(NULL, width, height, pitch);
+        return 1;
+    }
+    gpu_frame_count++;
+    sf2000_video_vram(buffer, width, height, pitch);
+    return 1;
 }
 
 void video_flip(void)

@@ -65,6 +65,9 @@
 #ifndef QPSX_GPU_RUNTIME_METRICS
 #define QPSX_GPU_RUNTIME_METRICS 0
 #endif
+#ifndef QPSX_GE_RAW_VRAM
+#define QPSX_GE_RAW_VRAM 0
+#endif
 #if QPSX_PLATFORM_UNIFROG && QPSX_PLATFORM_LINUX
 #error "QPSX platform selection is ambiguous"
 #endif
