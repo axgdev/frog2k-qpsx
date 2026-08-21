@@ -46,6 +46,12 @@
 #ifndef QPSX_GPU_LINEAR_4BPP
 #define QPSX_GPU_LINEAR_4BPP 0
 #endif
+#ifndef QPSX_GPU_PACKED_TILE_WRITES
+#define QPSX_GPU_PACKED_TILE_WRITES 0
+#endif
+#ifndef QPSX_GPU_PACKED_SPRITE_4BPP
+#define QPSX_GPU_PACKED_SPRITE_4BPP 0
+#endif
 #if QPSX_GPU_RUNTIME_METRICS
 extern u32 qpsx_gpu_poly_span_hist[2048];
 extern u32 qpsx_gpu_poly_pixel_hist[2048];
@@ -360,6 +366,29 @@ static void gpuTileSpanFn(u16 *pDst, u32 count, u16 data)
 #endif
 	if (!CF_MASKCHECK && !CF_BLEND) {
 		if (CF_MASKSET) { data = data | 0x8000; }
+		/* CF=0 is the overwhelmingly common opaque tile fill.  The normal
+		 * eight-halfword unroll still spends one store instruction per pixel.
+		 * On the little-endian SF2000 framebuffer, align once and write two
+		 * identical pixels with one 32-bit store.  The odd-pixel prefix/suffix
+		 * keeps this exact for every x alignment and the option is disabled for
+		 * other ports by default. */
+#if QPSX_GPU_PACKED_TILE_WRITES
+		if (CF == 0 && !CF_MASKSET) {
+			if (count && ((uintptr_t)pDst & 2u)) {
+				*pDst++ = data;
+				--count;
+			}
+			const u32 packed = (u32)data | ((u32)data << 16);
+			u32 *pDst32 = (u32 *)pDst;
+			while (count >= 2) {
+				*pDst32++ = packed;
+				count -= 2;
+			}
+			pDst = (u16 *)pDst32;
+			if (count) *pDst = data;
+			return;
+		}
+#endif
 		// QPSX v089: 8x loop unroll for tile fills - significant speedup
 		while (count >= 8) {
 			pDst[0] = data; pDst[1] = data;
@@ -468,6 +497,41 @@ static void gpuSpriteSpanFn(u16 *pDst, u32 count, u8* pTxt, u32 u0)
 	}
 
 	const u16 *CBA_; if (CF_TEXTMODE!=3) CBA_ = gpu_unai.CBA;
+
+#if QPSX_GPU_PACKED_SPRITE_4BPP
+	/* Most sprites in the Ridge Racer scene are opaque, unlit 4bpp (CF=32).
+	 * With the default texture window, two adjacent texels share one byte.
+	 * Handle only a complete, non-wrapping run so transparent texels and all
+	 * texture-window corner cases retain the generic renderer's behavior. */
+	if (CF == 0x20 && u0_mask == 255u && u0 <= 255u &&
+		count <= 256u - u0) {
+		u32 tu = u0;
+		if (tu & 1u) {
+			const u8 packed = pTxt[tu >> 1];
+			const u16 src = CBA_[packed >> 4];
+			if (src) *pDst = src;
+			++pDst;
+			++tu;
+			--count;
+		}
+		while (count >= 2) {
+			const u8 packed = pTxt[tu >> 1];
+			const u16 src0 = CBA_[packed & 0x0f];
+			const u16 src1 = CBA_[packed >> 4];
+			if (src0) pDst[0] = src0;
+			if (src1) pDst[1] = src1;
+			pDst += 2;
+			tu += 2;
+			count -= 2;
+		}
+		if (count) {
+			const u8 packed = pTxt[tu >> 1];
+			const u16 src = CBA_[packed & 0x0f];
+			if (src) *pDst = src;
+		}
+		return;
+	}
+#endif
 
 	do
 	{
