@@ -1079,7 +1079,11 @@ __asm__ __volatile__ (
 // QPSX_039: Check emu_frame_complete flag - exit if frame is done
 "lw    $t5, f_off_frame_complete($sp)         \n"
 "lw    $t6, 0($t5)                            \n"
+#if QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+"bnezl $t6, exit%=                            \n" // Annul the common not-taken delay slot
+#else
 "bnez  $t6, exit%=                            \n" // Exit loop if frame complete
+#endif
 "nop                                          \n"
 "lw    $v0, %[psxRegs_pc_off]($fp)            \n" // After psxBranchTest() returns, load psxRegs.pc
                                                   //  back into $v0, which could be different than
