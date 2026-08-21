@@ -271,6 +271,7 @@ QPSX_GPU_OBJECTS := src/gpu/$(GPU)/gpulib_if.o src/gpu/gpulib/gpu.o
 # otherwise intentionally lightweight make graph aware of that header so an
 # incremental A/B rebuild cannot reuse a stale renderer object.
 src/gpu/$(GPU)/gpulib_if.o: src/gpu/$(GPU)/gpu_poly2043_fast.h
+src/gpu/gpulib/gpu.o: src/gpu/gpulib/gpu_dma_chain_fast.h
 
 # QPSX v091: MIPS32 Assembly optimizations (SF2000 bare-metal only)
 # QPSX v099: Added psxmem_asm.o for memory write optimization
