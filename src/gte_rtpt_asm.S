@@ -62,8 +62,9 @@
 .ent gte_RTPT_asm
 gte_RTPT_asm:
     /* Keep the nine matrix terms in callee-saved registers for all vertices.
-     * This leaf does not touch gp or ra, so the frame is only eight words. */
-    addiu   $sp, $sp, -32
+     * This leaf does not touch gp or ra; the frame also saves the original
+     * SZ3 needed by an exception fallback. */
+    addiu   $sp, $sp, -40
     sw      $s0, 0($sp)
     sw      $s1, 4($sp)
     sw      $s2, 8($sp)
@@ -95,6 +96,7 @@ gte_RTPT_asm:
 
     /* RTPT's depth FIFO shifts SZ3 into SZ0 before producing SZ1..SZ3. */
     lhu     $t9, OFF_SZ3($t0)
+    sh      $t9, 32($sp)                /* restore if vertex three falls back */
     sh      $t9, OFF_SZ0($t0)
     sw      $zero, OFF_FLAG($t0)
     /* R33 is invariant across all three vertices.  Keep it in T9; A3 is
@@ -232,8 +234,12 @@ gte_RTPT_asm:
     sltu    $a3, $v0, $t5
     addu    $v1, $v1, $a3
     srl     $v0, $v0, 16
+    sra     $a3, $v1, 16              /* signed 64->32 guard after >>16 */
     sll     $v1, $v1, 16
     addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
     /* limG1: reject screen-X clipping and let C preserve its FLAG bit. */
     addiu   $a3, $v0, 1024
     sltiu   $v1, $a3, 2048
@@ -253,9 +259,13 @@ gte_RTPT_asm:
     sltu    $a3, $v0, $t6
     addu    $v1, $v1, $a3
     srl     $v0, $v0, 16
+    sra     $a3, $v1, 16              /* signed 64->32 guard after >>16 */
     sll     $v1, $v1, 16
     addu    $v0, $v0, $v1
-    /* limG2: reject screen-Y clipping and let C preserve its FLAG bit. */
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
+    /* limG2: reject screen-Y clipping and let the exact C path set FLAG. */
     addiu   $a3, $v0, 1024
     sltiu   $v1, $a3, 2048
     bne     $v1, $zero, 5f
@@ -302,7 +312,7 @@ gte_RTPT_asm:
     lw      $s5, 20($sp)
     lw      $s6, 24($sp)
     lw      $s7, 28($sp)
-    addiu   $sp, $sp, 32
+    addiu   $sp, $sp, 40
     li      $v0, 1
     jr      $ra
     nop
@@ -311,6 +321,8 @@ RTPT_FAIL:
     /* Restore the callee-saved register set.  The C caller resets FLAG and
      * rewrites every RTPT-visible register, so partial speculative stores
      * above are harmless. */
+    lhu     $t9, 32($sp)
+    sh      $t9, OFF_SZ3($t0)
     lw      $s0, 0($sp)
     lw      $s1, 4($sp)
     lw      $s2, 8($sp)
@@ -319,7 +331,7 @@ RTPT_FAIL:
     lw      $s5, 20($sp)
     lw      $s6, 24($sp)
     lw      $s7, 28($sp)
-    addiu   $sp, $sp, 32
+    addiu   $sp, $sp, 40
     move    $v0, $zero
     jr      $ra
     nop
