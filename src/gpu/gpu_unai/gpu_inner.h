@@ -55,6 +55,12 @@
 #ifndef QPSX_GPU_PACKED_POLY_WRITES
 #define QPSX_GPU_PACKED_POLY_WRITES 0
 #endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_FLATV
+#define QPSX_GPU_4BPP_GOURAUD_FLATV 0
+#endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS
+#define QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS 16
+#endif
 #ifndef QPSX_GPU_4BPP_FLATV
 #define QPSX_GPU_4BPP_FLATV 0
 #endif
@@ -296,6 +302,94 @@ static inline bool qpsx_gpu_poly_span_4bpp_linear(const gpu_unai_t &gpu_unai,
 	}
 	return true;
 }
+#endif
+
+#if QPSX_GPU_4BPP_GOURAUD_FLATV
+#if defined(__GNUC__)
+#define QPSX_GPU_GOURAUD_FLATV_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_GOURAUD_FLATV_NOINLINE
+#endif
+/* CF=161 is the measured lit 4bpp driver.  Accept only a full 256x256
+ * window, constant V, unit U, and a span proven not to wrap. */
+static QPSX_GPU_GOURAUD_FLATV_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_gouraud_flatv(const gpu_unai_t &gpu_unai,
+						      u16 *pDst, u32 count)
+{
+	const u32 full_mask = ((255u << FIXED_BITS) | fixed_LOMASK);
+	if (!count || gpu_unai.u_msk != full_mask ||
+	    gpu_unai.v_msk != full_mask || gpu_unai.v_inc != 0 ||
+	    gpu_unai.u_inc != (1 << FIXED_BITS))
+		return false;
+	const u32 texel = (gpu_unai.u & full_mask) >> FIXED_BITS;
+	if (texel >= 256u || count > 256u - texel)
+		return false;
+
+	const u8 *row = ((const u8 *)gpu_unai.TBA) +
+				(((gpu_unai.v & full_mask) >> FIXED_BITS) << 11);
+	const u16 *cba = gpu_unai.CBA;
+	u32 l_gCol = gpu_unai.gCol;
+	const u32 l_gInc = gpu_unai.gInc;
+	if (texel & 1u) {
+		const u16 src = cba[*row++ >> 4];
+		if (src)
+			*pDst = gpuLightingTXTGouraud_Fast(src, l_gCol) |
+				(src & 0x8000);
+		++pDst;
+		l_gCol += l_gInc;
+		--count;
+	}
+
+	const bool pair_aligned = !((uintptr_t)pDst & 2u);
+	if (pair_aligned) {
+		while (count >= 2) {
+			const u8 packed = *row++;
+			const u16 src0 = cba[packed & 0xf];
+			const u16 src1 = cba[packed >> 4];
+			u16 out0 = 0, out1 = 0;
+			if (src0)
+				out0 = gpuLightingTXTGouraud_Fast(src0, l_gCol) |
+					(src0 & 0x8000);
+			l_gCol += l_gInc;
+			if (src1)
+				out1 = gpuLightingTXTGouraud_Fast(src1, l_gCol) |
+					(src1 & 0x8000);
+			l_gCol += l_gInc;
+			if (src0 && src1)
+				*(u32 *)pDst = (u32)out0 | ((u32)out1 << 16);
+			else {
+				if (src0) pDst[0] = out0;
+				if (src1) pDst[1] = out1;
+			}
+			pDst += 2;
+			count -= 2;
+		}
+	} else {
+		while (count >= 2) {
+			const u8 packed = *row++;
+			const u16 src0 = cba[packed & 0xf];
+			const u16 src1 = cba[packed >> 4];
+			if (src0)
+				pDst[0] = gpuLightingTXTGouraud_Fast(src0, l_gCol) |
+					(src0 & 0x8000);
+			l_gCol += l_gInc;
+			if (src1)
+				pDst[1] = gpuLightingTXTGouraud_Fast(src1, l_gCol) |
+					(src1 & 0x8000);
+			l_gCol += l_gInc;
+			pDst += 2;
+			count -= 2;
+		}
+	}
+	if (count) {
+		const u16 src = cba[*row & 0xf];
+		if (src)
+			*pDst = gpuLightingTXTGouraud_Fast(src, l_gCol) |
+				(src & 0x8000);
+	}
+	return true;
+}
+#undef QPSX_GPU_GOURAUD_FLATV_NOINLINE
 #endif
 
 #if QPSX_GPU_PACKED_POLY_WRITES
@@ -899,6 +993,11 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 #endif
 #if QPSX_GPU_LINEAR_4BPP
 	if (CF == 32 && qpsx_gpu_poly_span_4bpp_linear(gpu_unai, pDst, count))
+		return;
+#endif
+#if QPSX_GPU_4BPP_GOURAUD_FLATV
+	if (CF == 161 && count >= QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS &&
+	    qpsx_gpu_poly_span_4bpp_gouraud_flatv(gpu_unai, pDst, count))
 		return;
 #endif
 	// Blend func can save an operation if it knows uSrc MSB is unset.
