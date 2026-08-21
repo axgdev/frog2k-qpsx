@@ -61,6 +61,9 @@
 #ifndef QPSX_GPU_4BPP_PALETTE_LUT
 #define QPSX_GPU_4BPP_PALETTE_LUT 0
 #endif
+#ifndef QPSX_GPU_HOT_DRIVER_ORDER
+#define QPSX_GPU_HOT_DRIVER_ORDER 0
+#endif
 #if QPSX_GPU_4BPP_PALETTE_LUT
 #if defined(__GNUC__)
 #define QPSX_GPU_PALETTE_LUT_NOINLINE __attribute__((noinline))
@@ -1093,6 +1096,18 @@ static void PolyNULL(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 		fprintf(stdout,"PolyNULL()\n");
 	#endif
 }
+
+/* The physical scene used for SF2000 tuning exercises only a few of the
+ * 2048 table entries.  Explicitly instantiate those entries before the
+ * complete dispatch table so function-section linking places their hot
+ * bodies together at the front of the renderer text.  The table remains
+ * complete and all other variants retain their exact semantics. */
+#if QPSX_GPU_HOT_DRIVER_ORDER
+template void gpuPolySpanFn<32>(const gpu_unai_t &, u16 *, u32);
+template void gpuPolySpanFn<161>(const gpu_unai_t &, u16 *, u32);
+template void gpuPolySpanFn<163>(const gpu_unai_t &, u16 *, u32);
+template void gpuPolySpanFn<2>(const gpu_unai_t &, u16 *, u32);
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Polygon innerloops driver
