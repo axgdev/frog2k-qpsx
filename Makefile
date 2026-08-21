@@ -79,10 +79,12 @@ check: $(GPU_POLY2043_TEST) $(GPU_DMA_CHAIN_TEST) $(GTE_INTPL_TEST) \
 qpsx-asm-classifier-audit: $(PSXMEM_CLASSIFIER_TEST)
 	./$(PSXMEM_CLASSIFIER_TEST)
 
-# Assemble both Linux helper configurations.  The classifier itself is
-# identical, while the first three branches in the fast configuration are
-# deliberately retained in the audit so changes cannot accidentally fold the
-# broad RAM mirror test over a hardware alias.
+# Assemble both Linux helper configurations with and without the production
+# PIC ABI, and with both psxM register contracts.  The classifier itself is
+# identical, while the fastpath branches remain in the audit so changes cannot
+# accidentally fold the broad RAM mirror test over a hardware alias.  The PIC
+# pass proves that each leaf establishes its GOT from $t9 and restores the
+# dispatcher's caller $gp before every non-fast return or tail call.
 qpsx-asm-classifier-cross-audit:
 	@set -eu; \
 	test -n '$(QPSX_ASM_CROSS_CC)' || { \
@@ -93,52 +95,79 @@ qpsx-asm-classifier-cross-audit:
 	}; \
 	tmp=$$(mktemp -d); \
 	trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
-	for fastpath in 0 1; do \
-		$(QPSX_ASM_CROSS_CC) -EL -march=mips32 -mno-abicalls -fno-pic \
-			-ffreestanding -DQPSX_LINUX_RAM_HELPER_FASTPATH=$$fastpath \
-			-DQPSX_LINUX_ALLOCATED_RAM=1 -DQPSX_MIPS_PSMEM_REG=1 \
-			-c src/psxmem_asm.S -o "$$tmp/psxmem-$$fastpath.o"; \
-		$(QPSX_ASM_CROSS_OBJDUMP) -dr -M no-aliases \
-			"$$tmp/psxmem-$$fastpath.o" > "$$tmp/psxmem-$$fastpath.dis"; \
-		for fn in psxMemWrite8_asm psxMemWrite16_asm psxMemWrite32_asm \
-			psxMemRead8_asm psxMemRead16_asm psxMemRead32_asm; do \
-			block=$$(awk -v fn="$$fn" \
-				'$$0 ~ "<" fn ">:" {inside=1} inside {print} inside && /^$$/ {exit}' \
-				"$$tmp/psxmem-$$fastpath.dis"); \
-			test -n "$$block"; \
-			printf '%s\n' "$$block" | grep -Eq '[[:space:]]31097fff[[:space:]]+andi[[:space:]]+t1,t0' || { \
-				echo "$$fn: missing exact 0x7fff mask (fastpath=$$fastpath)" >&2; exit 1; \
-			}; \
-			printf '%s\n' "$$block" | grep -Eq '[[:space:]]240a1f80[[:space:]]+' || { \
-				echo "$$fn: missing 0x1f80 compare constant (fastpath=$$fastpath)" >&2; exit 1; \
-			}; \
-			printf '%s\n' "$$block" | grep -Eq '[[:space:]]340abf80[[:space:]]+' || { \
-				echo "$$fn: missing 0xbf80 compare constant (fastpath=$$fastpath)" >&2; exit 1; \
-			}; \
-			test "$$(printf '%s\n' "$$block" | grep -Ec '[[:space:]]beq[[:space:]]+t1,t2,')" -ge 1; \
-			test "$$(printf '%s\n' "$$block" | grep -Ec '[[:space:]]beq[[:space:]]+t0,t2,')" -eq 1; \
-			if printf '%s\n' "$$block" | grep -Eq '[[:space:]]31091f80[[:space:]]'; then \
-				echo "$$fn: classifier still uses the old broad mask (fastpath=$$fastpath)" >&2; exit 1; \
-			fi; \
-			case "$$fn" in psxMemRead*) lut=psxMemRLUT ;; *) lut=psxMemWLUT ;; esac; \
-			printf '%s\n' "$$block" | awk -v lut="$$lut" -v fn="$$fn" '\
-				index($$0, "R_MIPS_HI16") && index($$0, lut) { hi=1 } \
-				index($$0, "R_MIPS_LO16") && index($$0, lut) { lo=1 } \
-				/[[:space:]]sll[[:space:]]+t1,t0,0x2/ { if (!sll) sll=NR } \
-				/[[:space:]]addu[[:space:]]+t4,t4,t1/ { if (!addu) addu=NR } \
-				/[[:space:]]lw[[:space:]]+t4,0\(t4\)/ { \
-					if (!first) first=NR; else if (!second) second=NR; count++ \
-				} \
-				END { \
-					if (!hi || !lo) { print fn ": missing LUT global relocation" > "/dev/stderr"; exit 1 } \
-					if (!first || !second || count < 2) { print fn ": missing two-level LUT loads" > "/dev/stderr"; exit 1 } \
-					if (!sll || !addu) { print fn ": missing indexed LUT address arithmetic" > "/dev/stderr"; exit 1 } \
-					if (first >= sll) { print fn ": LUT base load follows index arithmetic" > "/dev/stderr"; exit 1 } \
-					if (second <= addu) { print fn ": LUT entry load precedes indexed address" > "/dev/stderr"; exit 1 } \
-				}'; \
+	for pic in 0 1; do \
+		if test "$$pic" -eq 1; then pic_flags='-mabicalls -fPIC'; else pic_flags='-mno-abicalls -fno-pic'; fi; \
+		for fastpath in 0 1; do \
+			for psmem in 0 1; do \
+				obj="$$tmp/psxmem-pic$$pic-fast$$fastpath-s7$$psmem.o"; \
+				dis="$$tmp/psxmem-pic$$pic-fast$$fastpath-s7$$psmem.dis"; \
+				$(QPSX_ASM_CROSS_CC) -EL -march=mips32 $$pic_flags \
+					-ffreestanding -DQPSX_LINUX_RAM_HELPER_FASTPATH=$$fastpath \
+					-DQPSX_LINUX_ALLOCATED_RAM=1 -DQPSX_MIPS_PSMEM_REG=$$psmem \
+					-c src/psxmem_asm.S -o "$$obj"; \
+				$(QPSX_ASM_CROSS_OBJDUMP) -dr -M no-aliases "$$obj" > "$$dis"; \
+				for fn in psxMemWrite8_asm psxMemWrite16_asm psxMemWrite32_asm \
+					psxMemRead8_asm psxMemRead16_asm psxMemRead32_asm; do \
+					block=$$(awk -v fn="$$fn" \
+						'$$0 ~ "<" fn ">:" {inside=1} inside {print} inside && /^$$/ {exit}' \
+						"$$dis"); \
+					test -n "$$block"; \
+					printf '%s\n' "$$block" | grep -Eq '[[:space:]]31097fff[[:space:]]+andi[[:space:]]+t1,t0' || { \
+						echo "$$fn: missing exact 0x7fff mask (pic=$$pic fastpath=$$fastpath s7=$$psmem)" >&2; exit 1; \
+					}; \
+					printf '%s\n' "$$block" | grep -Eq '[[:space:]]240a1f80[[:space:]]+' || { \
+						echo "$$fn: missing 0x1f80 compare constant (pic=$$pic fastpath=$$fastpath s7=$$psmem)" >&2; exit 1; \
+					}; \
+					printf '%s\n' "$$block" | grep -Eq '[[:space:]]340abf80[[:space:]]+' || { \
+						echo "$$fn: missing 0xbf80 compare constant (pic=$$pic fastpath=$$fastpath s7=$$psmem)" >&2; exit 1; \
+					}; \
+					test "$$(printf '%s\n' "$$block" | grep -Ec '[[:space:]]beq[[:space:]]+t1,t2,')" -ge 1; \
+					test "$$(printf '%s\n' "$$block" | grep -Ec '[[:space:]]beq[[:space:]]+t0,t2,')" -eq 1; \
+					if printf '%s\n' "$$block" | grep -Eq '[[:space:]]31091f80[[:space:]]'; then \
+						echo "$$fn: classifier still uses the old broad mask (pic=$$pic fastpath=$$fastpath s7=$$psmem)" >&2; exit 1; \
+					fi; \
+					case "$$fn" in psxMemRead*) lut=psxMemRLUT ;; *) lut=psxMemWLUT ;; esac; \
+					printf '%s\n' "$$block" | awk -v lut="$$lut" -v fn="$$fn" -v pic="$$pic" -v fastpath="$$fastpath" -v psmem="$$psmem" '\
+						index($$0, "R_MIPS_HI16") && index($$0, lut) { hi=1 } \
+						index($$0, "R_MIPS_LO16") && index($$0, lut) { lo=1 } \
+						index($$0, "R_MIPS_GOT16") && index($$0, lut) { got=1 } \
+						index($$0, "R_MIPS_CALL16") && index($$0, "psxHw") { hw_call=1 } \
+						index($$0, "R_MIPS_HI16") && index($$0, "psxHw") { hw_hi=1 } \
+						index($$0, "R_MIPS_LO16") && index($$0, "psxHw") { hw_lo=1 } \
+						index($$0, "lw") && index($$0, "t4,0(gp)") { if (!global) global=NR } \
+						index($$0, "sll") && index($$0, "t1,t0,0x2") { if (!sll) sll=NR } \
+						index($$0, "addu") && index($$0, "t4,t4,t1") { if (!addu) addu=NR } \
+						index($$0, "lw") && index($$0, "t4,0(t4)") { \
+							if (!first) first=NR; else if (!second) second=NR; count++ \
+						} \
+						index($$0, "sw") && index($$0, "gp,16(sp)") { if (!save) save=NR } \
+						index($$0, "addu") && index($$0, "gp,gp,t9") { if (!cpload) cpload=NR } \
+						index($$0, "lw") && index($$0, "gp,16(sp)") { restores++; last_restore=NR } \
+						(index($$0, "jr") && (index($$0, "ra") || index($$0, "t9"))) { returns++; if (last_restore != NR - 1) unguarded++ } \
+						index($$0, "jr") && index($$0, "t9") { tail_jumps++ } \
+						index($$0, "addu") && index($$0, "t9,t0,zero") { t9_moves++ } \
+						index($$0, "jalr") && index($$0, "t0") { rec_calls++ } \
+						END { \
+							mode = "pic=" pic " fastpath=" fastpath " s7=" psmem; \
+							if (pic && (!got || !global)) { print fn ": missing PIC GOT LUT load (" mode ")" > "/dev/stderr"; exit 1 } \
+							if (!pic && (!hi || !lo)) { print fn ": missing non-PIC LUT relocation (" mode ")" > "/dev/stderr"; exit 1 } \
+							if (!first || !second || count < 2) { print fn ": missing two-level LUT loads (" mode ")" > "/dev/stderr"; exit 1 } \
+							if (!sll || !addu) { print fn ": missing indexed LUT address arithmetic (" mode ")" > "/dev/stderr"; exit 1 } \
+							if (pic && global >= sll) { print fn ": PIC LUT global load follows index arithmetic (" mode ")" > "/dev/stderr"; exit 1 } \
+							if (first >= sll) { print fn ": LUT base load follows index arithmetic (" mode ")" > "/dev/stderr"; exit 1 } \
+							if (second <= addu) { print fn ": LUT entry load precedes indexed address (" mode ")" > "/dev/stderr"; exit 1 } \
+							if (pic && (!save || !cpload || save >= cpload)) { print fn ": missing caller-gp save before .cpload (" mode ")" > "/dev/stderr"; exit 1 } \
+							expected_unguarded = (fastpath && psmem && fn ~ /^psxMemRead/) ? 1 : 0; \
+							if (unguarded != expected_unguarded) { print fn ": wrong restored-gp return count " unguarded " (expected " expected_unguarded ", " mode ")" > "/dev/stderr"; exit 1 } \
+						if (tail_jumps != 1 || (pic && !hw_call) || (!pic && (!hw_hi || !hw_lo))) { print fn ": hardware tail target setup mismatch (" mode ")" > "/dev/stderr"; exit 1 } \
+						if (fn ~ /^psxMemWrite/ && (rec_calls != 1 || t9_moves != 1)) { print fn ": recClear t9 setup mismatch (" mode ")" > "/dev/stderr"; exit 1 } \
+						if (fn ~ /^psxMemRead/ && (rec_calls != 0 || t9_moves != 0)) { print fn ": unexpected read call t9 setup (" mode ")" > "/dev/stderr"; exit 1 } \
+						}'; \
+				 done; \
+			done; \
 		done; \
 	done; \
-	echo 'qpsx-asm-classifier-cross-audit: MIPS assembly/disassembly verified for both RAM-helper modes'
+	echo 'qpsx-asm-classifier-cross-audit: PIC/non-PIC MIPS disassembly verified for all helpers and RAM modes'
 
 gte-rtpt-asm-audit:
 	@set -eu; tmp=$$(mktemp -d); \

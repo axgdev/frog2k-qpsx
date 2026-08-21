@@ -83,6 +83,36 @@
     lw      $t4, 0($t4)             /* $t4 = LUT[t] page pointer */
     .endm
 
+/* The recompiler's PIC dispatcher keeps its cache base in $gp, so these
+ * helpers must not borrow that value as their GOT pointer.  A slow path gets
+ * an o32-aligned frame with the caller's $gp at 16($sp), then .cpload derives
+ * this function's GOT from the entry $t9.  The RAM fast-return path enters no
+ * frame at all when $s7 already holds psxM. */
+    .macro QPSX_ASM_SLOW_ENTER
+    addiu   $sp, $sp, -24
+    sw      $gp, 16($sp)
+#if defined(__PIC__) || defined(__pic__)
+    .cpload $t9
+#endif
+    .endm
+
+/* Restore $gp and deallocate the slow frame in the return delay slot. */
+    .macro QPSX_ASM_SLOW_RETURN
+    lw      $gp, 16($sp)
+    jr      $ra
+    addiu   $sp, $sp, 24
+    .endm
+
+/* Resolve a PIC tail target while this helper's GOT is live, pass its address
+ * in $t9 for the callee's .cpload, then restore the caller's $gp before the
+ * jump. */
+    .macro QPSX_ASM_SLOW_TAIL target
+    la      $t9, \target
+    lw      $gp, 16($sp)
+    jr      $t9
+    addiu   $sp, $sp, 24
+    .endm
+
     .extern psxHwRead32
     .extern psxHwRead16
     .extern psxHwRead8
@@ -104,6 +134,8 @@ psxMemWrite32_asm:
     /* Extract high 16 bits: t = mem >> 16 */
     srl     $t0, $a0, 16            /* $t0 = t = mem >> 16 */
 
+    QPSX_ASM_SLOW_ENTER
+
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_write32
 
@@ -124,21 +156,19 @@ psxMemWrite32_asm:
      * v367: Code invalidation - ALWAYS (g_opt_skip_code_inv hardcoded to 0)
      *----------------------------------------------------------------------*/
     /* Call recClear(mem, 1) for code invalidation */
-    addiu   $sp, $sp, -8
-    sw      $ra, 4($sp)
+    sw      $ra, 20($sp)
 
     /* recClear(u32 addr, u32 size) - $a0 already has mem */
     li      $a1, 1                  /* size = 1 */
     la      $t0, recClear
+    addu    $t9, $t0, $zero          /* PIC callee gets its entry address */
     jalr    $t0
     nop
 
-    lw      $ra, 4($sp)
-    addiu   $sp, $sp, 8
+    lw      $ra, 20($sp)
 
 .Ldone32:
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
     /*----------------------------------------------------------------------
      * HW Region handler
@@ -154,14 +184,11 @@ psxMemWrite32_asm:
     lw      $t4, 0($t4)             /* $t4 = psxH base */
     addu    $t4, $t4, $t3           /* $t4 = psxH + m */
     sw      $a1, 0($t4)             /* store to scratchpad */
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_io_write32:
     /* Hardware I/O: call psxHwWrite32(mem, value) */
-    la      $t0, psxHwWrite32
-    jr      $t0                     /* tail call optimization */
-    nop
+    QPSX_ASM_SLOW_TAIL psxHwWrite32
 
 .Lnull_ptr32:
     /* NULL pointer - check for cache control port 0xfffe0130 */
@@ -170,8 +197,7 @@ psxMemWrite32_asm:
     nop
 
     /* Cache control port - just return for now */
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
     .end psxMemWrite32_asm
     .size psxMemWrite32_asm, .-psxMemWrite32_asm
@@ -187,6 +213,8 @@ psxMemWrite32_asm:
 psxMemWrite16_asm:
     srl     $t0, $a0, 16            /* $t0 = t = mem >> 16 */
 
+    QPSX_ASM_SLOW_ENTER
+
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_write16
 
@@ -201,22 +229,20 @@ psxMemWrite16_asm:
 
     /* v367: Code invalidation - ALWAYS (hardcoded) */
     /* Align address for Clear: mem & ~3 */
-    addiu   $sp, $sp, -8
-    sw      $ra, 4($sp)
+    sw      $ra, 20($sp)
 
     li      $t1, -4                 /* 0xFFFFFFFC */
     and     $a0, $a0, $t1           /* $a0 = mem & ~3 */
     li      $a1, 1
     la      $t0, recClear
+    addu    $t9, $t0, $zero          /* PIC callee gets its entry address */
     jalr    $t0
     nop
 
-    lw      $ra, 4($sp)
-    addiu   $sp, $sp, 8
+    lw      $ra, 20($sp)
 
 .Ldone16:
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_write16:
     sltiu   $t1, $t3, 0x400
@@ -228,13 +254,10 @@ psxMemWrite16_asm:
     lw      $t4, 0($t4)
     addu    $t4, $t4, $t3
     sh      $a1, 0($t4)
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_io_write16:
-    la      $t0, psxHwWrite16
-    jr      $t0
-    nop
+    QPSX_ASM_SLOW_TAIL psxHwWrite16
 
     .end psxMemWrite16_asm
     .size psxMemWrite16_asm, .-psxMemWrite16_asm
@@ -250,6 +273,8 @@ psxMemWrite16_asm:
 psxMemWrite8_asm:
     srl     $t0, $a0, 16            /* $t0 = t = mem >> 16 */
 
+    QPSX_ASM_SLOW_ENTER
+
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_write8
 
@@ -264,22 +289,20 @@ psxMemWrite8_asm:
 
     /* v367: Code invalidation - ALWAYS (hardcoded) */
     /* Align address for Clear: mem & ~3 */
-    addiu   $sp, $sp, -8
-    sw      $ra, 4($sp)
+    sw      $ra, 20($sp)
 
     li      $t1, -4
     and     $a0, $a0, $t1
     li      $a1, 1
     la      $t0, recClear
+    addu    $t9, $t0, $zero          /* PIC callee gets its entry address */
     jalr    $t0
     nop
 
-    lw      $ra, 4($sp)
-    addiu   $sp, $sp, 8
+    lw      $ra, 20($sp)
 
 .Ldone8:
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_write8:
     sltiu   $t1, $t3, 0x400
@@ -291,13 +314,10 @@ psxMemWrite8_asm:
     lw      $t4, 0($t4)
     addu    $t4, $t4, $t3
     sb      $a1, 0($t4)
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_io_write8:
-    la      $t0, psxHwWrite8
-    jr      $t0
-    nop
+    QPSX_ASM_SLOW_TAIL psxHwWrite8
 
     .end psxMemWrite8_asm
     .size psxMemWrite8_asm, .-psxMemWrite8_asm
@@ -328,6 +348,10 @@ psxMemRead32_asm:
     nop
 #endif
 
+    /* All remaining paths use a global symbol; establish this helper's GOT
+     * after the RAM fast-return tests. */
+    QPSX_ASM_SLOW_ENTER
+
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_read32
 
@@ -340,8 +364,7 @@ psxMemRead32_asm:
     /* Direct memory read - THE HOT PATH */
     addu    $t5, $t4, $t3           /* $t5 = p + m */
     lw      $v0, 0($t5)             /* $v0 = *(u32*)(p + m) */
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read32:
@@ -350,6 +373,7 @@ psxMemRead32_asm:
     srl     $t5, $t5, 11
     addu    $t4, $s7, $t5             /* t4 = live psxM + offset */
 #else
+    QPSX_ASM_SLOW_ENTER
     la      $t4, psxM
     lw      $t4, 0($t4)              /* t4 = psxM base */
     sll     $t5, $a0, 11
@@ -357,8 +381,12 @@ psxMemRead32_asm:
     addu    $t4, $t4, $t5
 #endif
     lw      $v0, 0($t4)
+#if QPSX_ASM_HAS_PSMEM_REG
     jr      $ra
     nop
+#else
+    QPSX_ASM_SLOW_RETURN
+#endif
 #endif
 
 .Lhw_read32:
@@ -372,18 +400,14 @@ psxMemRead32_asm:
     lw      $t4, 0($t4)
     addu    $t4, $t4, $t3
     lw      $v0, 0($t4)
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_io_read32:
-    la      $t0, psxHwRead32
-    jr      $t0                     /* tail call */
-    nop
+    QPSX_ASM_SLOW_TAIL psxHwRead32
 
 .Lread_null32:
     li      $v0, 0
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
     .end psxMemRead32_asm
     .size psxMemRead32_asm, .-psxMemRead32_asm
@@ -410,6 +434,7 @@ psxMemRead16_asm:
     beq     $t1, $t2, .Lram_read16
     nop
 #endif
+    QPSX_ASM_SLOW_ENTER
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_read16
 
@@ -420,8 +445,7 @@ psxMemRead16_asm:
 
     addu    $t5, $t4, $t3
     lhu     $v0, 0($t5)
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read16:
@@ -430,6 +454,7 @@ psxMemRead16_asm:
     srl     $t5, $t5, 11
     addu    $t4, $s7, $t5
 #else
+    QPSX_ASM_SLOW_ENTER
     la      $t4, psxM
     lw      $t4, 0($t4)
     sll     $t5, $a0, 11
@@ -437,8 +462,12 @@ psxMemRead16_asm:
     addu    $t4, $t4, $t5
 #endif
     lhu     $v0, 0($t4)
+#if QPSX_ASM_HAS_PSMEM_REG
     jr      $ra
     nop
+#else
+    QPSX_ASM_SLOW_RETURN
+#endif
 #endif
 
 .Lhw_read16:
@@ -450,18 +479,14 @@ psxMemRead16_asm:
     lw      $t4, 0($t4)
     addu    $t4, $t4, $t3
     lhu     $v0, 0($t4)
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_io_read16:
-    la      $t0, psxHwRead16
-    jr      $t0
-    nop
+    QPSX_ASM_SLOW_TAIL psxHwRead16
 
 .Lread_null16:
     li      $v0, 0
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
     .end psxMemRead16_asm
     .size psxMemRead16_asm, .-psxMemRead16_asm
@@ -488,6 +513,7 @@ psxMemRead8_asm:
     beq     $t1, $t2, .Lram_read8
     nop
 #endif
+    QPSX_ASM_SLOW_ENTER
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_read8
 
@@ -498,8 +524,7 @@ psxMemRead8_asm:
 
     addu    $t5, $t4, $t3
     lbu     $v0, 0($t5)
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read8:
@@ -508,6 +533,7 @@ psxMemRead8_asm:
     srl     $t5, $t5, 11
     addu    $t4, $s7, $t5
 #else
+    QPSX_ASM_SLOW_ENTER
     la      $t4, psxM
     lw      $t4, 0($t4)
     sll     $t5, $a0, 11
@@ -515,8 +541,12 @@ psxMemRead8_asm:
     addu    $t4, $t4, $t5
 #endif
     lbu     $v0, 0($t4)
+#if QPSX_ASM_HAS_PSMEM_REG
     jr      $ra
     nop
+#else
+    QPSX_ASM_SLOW_RETURN
+#endif
 #endif
 
 .Lhw_read8:
@@ -528,18 +558,14 @@ psxMemRead8_asm:
     lw      $t4, 0($t4)
     addu    $t4, $t4, $t3
     lbu     $v0, 0($t4)
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
 .Lhw_io_read8:
-    la      $t0, psxHwRead8
-    jr      $t0
-    nop
+    QPSX_ASM_SLOW_TAIL psxHwRead8
 
 .Lread_null8:
     li      $v0, 0
-    jr      $ra
-    nop
+    QPSX_ASM_SLOW_RETURN
 
     .end psxMemRead8_asm
     .size psxMemRead8_asm, .-psxMemRead8_asm
