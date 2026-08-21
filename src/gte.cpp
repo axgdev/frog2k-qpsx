@@ -1061,6 +1061,41 @@ void gteCC(void) {
 }
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
+template<int SHIFT, int LM>
+static void gteINTPL_const(void) {
+	const int shift_const = SHIFT;
+	const int lm = LM;
+
+#ifdef GTE_LOG
+	GTE_LOG("GTE INTPL\n");
+#endif
+	gteFLAG = 0;
+
+	gteMAC1 = ((gteIR1 << 12) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift_const;
+	gteMAC2 = ((gteIR2 << 12) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift_const;
+	gteMAC3 = ((gteIR3 << 12) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift_const;
+	gteIR1 = limB1(gteMAC1, lm);
+	gteIR2 = limB2(gteMAC2, lm);
+	gteIR3 = limB3(gteMAC3, lm);
+	gteRGB0 = gteRGB1;
+	gteRGB1 = gteRGB2;
+	gteCODE2 = gteCODE;
+	gteR2 = limC1(gteMAC1 >> 4);
+	gteG2 = limC2(gteMAC2 >> 4);
+	gteB2 = limC3(gteMAC3 >> 4);
+}
+
+#if QPSX_GTE_INTPL_OPTIMIZE
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s0_l0(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<0, 0>(); }
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s0_l1(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<0, 1>(); }
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s1_l0(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<12, 0>(); }
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s1_l1(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<12, 1>(); }
+#endif
+
 void gteINTPL(u32 gteop) {
 	QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL);
 	int shift = 12 * GTE_SF(gteop);

@@ -74,6 +74,9 @@ QPSX_PHASE_METRICS ?= 0
 # compile-time off in every normal/core-speed build; diagnostic targets opt in
 # and report once at shutdown, so no cycle reads or logging enter the hot path.
 QPSX_GTE_OPCODE_COUNTER ?= 0
+# Compile only the scalar INTPL helper with a stronger optimizer.  This is an
+# attributable experiment; normal builds leave it disabled.
+QPSX_GTE_INTPL_OPTIMIZE ?= 0
 # Emit one architecturally harmless, uniquely encoded MIPS no-op per
 # retro_run.  QEMU's cache oracle recognizes it as an exact frame boundary;
 # the physical target pays one instruction per frame and tests the identical
@@ -110,6 +113,7 @@ QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_HOT_LAYOUT=$(QPSX_HOT_LAYOUT) \
 	-DQPSX_PHASE_METRICS=$(QPSX_PHASE_METRICS) \
 	-DQPSX_GTE_OPCODE_COUNTER=$(QPSX_GTE_OPCODE_COUNTER) \
+	-DQPSX_GTE_INTPL_OPTIMIZE=$(QPSX_GTE_INTPL_OPTIMIZE) \
 	-DQPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS) \
 	-DQPSX_BUILD_TAG=\"$(QPSX_BUILD_TAG)\" \
 	-DQPSX_BUILD_FINGERPRINT=\"$(QPSX_BUILD_FINGERPRINT)\" \
@@ -237,6 +241,7 @@ $(QPSX_CONFIG_STAMP): qpsx-config-force
 		'QPSX_HOT_LAYOUT=$(QPSX_HOT_LAYOUT)' \
 		'QPSX_PHASE_METRICS=$(QPSX_PHASE_METRICS)' \
 		'QPSX_GTE_OPCODE_COUNTER=$(QPSX_GTE_OPCODE_COUNTER)' \
+		'QPSX_GTE_INTPL_OPTIMIZE=$(QPSX_GTE_INTPL_OPTIMIZE)' \
 		'QPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS)' \
 		'QPSX_BUILD_TAG=$(QPSX_BUILD_TAG)' \
 		'QPSX_BUILD_FINGERPRINT=$(QPSX_BUILD_FINGERPRINT)' \

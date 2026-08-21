@@ -24,6 +24,10 @@
 #include "psxcommon.h"
 #include "r3000a.h"
 
+#ifndef QPSX_GTE_INTPL_OPTIMIZE
+#define QPSX_GTE_INTPL_OPTIMIZE 0
+#endif
+
 void gteMFC2(void);
 void gteCFC2(void);
 void gteMTC2(void);
@@ -36,6 +40,12 @@ void gteOP(u32 gteop);
 void gteNCLIP(void);
 void gteDPCS(u32 gteop);
 void gteINTPL(u32 gteop);
+#if QPSX_GTE_INTPL_OPTIMIZE
+void gteINTPL_s0_l0(void);
+void gteINTPL_s0_l1(void);
+void gteINTPL_s1_l0(void);
+void gteINTPL_s1_l1(void);
+#endif
 void gteMVMVA(u32 gteop);
 void gteNCDS(void);
 void gteNCDT(void);
