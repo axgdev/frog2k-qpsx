@@ -25,6 +25,10 @@ QPSX_ENABLE_MIPS32R2 ?= 0
 # 16 KiB, 2-way I-cache; size-oriented builds can beat -O2 when the complete
 # GPU/recompiler text no longer fits in the hot instruction working set.
 QPSX_OPTIMIZE ?= -O2
+# Optional size optimization for the renderer translation units only.  Keep
+# this empty by default: the recompiler, GTE, memory and audio code are much
+# more sensitive to -O2 scheduling than the large generated GPU driver.
+QPSX_GPU_OPTIMIZE ?=
 
 QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_PLATFORM_UNIFROG=$(QPSX_PLATFORM_UNIFROG) \
@@ -184,6 +188,11 @@ OBJS += \
 	src/gpu/gpulib/gpu.o \
 	src/gpu/gpulib/vout_port.o
 
+# The Unai renderer is a very large template-instantiated translation unit.
+# Keep the object list explicit so the optional flag cannot leak into the
+# recompiler, GTE, memory, or audio translation units.
+QPSX_GPU_OBJECTS := src/gpu/$(GPU)/gpulib_if.o src/gpu/gpulib/gpu.o
+
 # QPSX v091: MIPS32 Assembly optimizations (SF2000 bare-metal only)
 # QPSX v099: Added psxmem_asm.o for memory write optimization
 ifeq ($(platform), sf2000)
@@ -246,7 +255,7 @@ clean:
 	$(CC) $(CFLAGS) -c $< -o $@
 
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(if $(filter $@,$(QPSX_GPU_OBJECTS)),$(QPSX_GPU_OPTIMIZE),) -c $< -o $@
 
 %.o: %.S
 	$(CC) $(CFLAGS) -c $< -o $@
