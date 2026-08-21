@@ -55,6 +55,9 @@
 #ifndef QPSX_GPU_4BPP_FLATV
 #define QPSX_GPU_4BPP_FLATV 0
 #endif
+#ifndef QPSX_GPU_4BPP_FLATV_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_MIN_PIXELS 16
+#endif
 #if QPSX_GPU_RUNTIME_METRICS
 extern u32 qpsx_gpu_poly_span_hist[2048];
 extern u32 qpsx_gpu_poly_pixel_hist[2048];
@@ -76,10 +79,18 @@ extern u32 qpsx_gpu_poly_flat_v_pixels;
  * byte-row address for every pixel.  This path proves that U will not wrap
  * during the span once, then keeps a row pointer and only advances U.  It is
  * deliberately restricted to CF=32 callers; all window, wrap, blend, mask,
- * lighting, and Gouraud cases retain the exact original loop.
+ * lighting, and Gouraud cases retain the exact original loop.  The helper is
+ * out-of-line and only considered for long spans: putting the proof and the
+ * paired-byte loop into the CF=32 hot function enlarged its instruction
+ * footprint enough to lose on a 16 KiB I-cache even when it saved pixels.
  */
-static inline bool qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai,
-                                                 u16 *pDst, u32 count)
+#if defined(__GNUC__)
+#define QPSX_GPU_FLATV_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_FLATV_NOINLINE
+#endif
+static QPSX_GPU_FLATV_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 {
 	const u32 full_mask = ((255u << FIXED_BITS) | fixed_LOMASK);
 	if (!count)
@@ -151,6 +162,7 @@ static inline bool qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai,
 	} while (--count);
 	return true;
 }
+#undef QPSX_GPU_FLATV_NOINLINE
 #endif
 
 #ifdef __arm__
@@ -769,7 +781,8 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 	}
 #endif
 #if QPSX_GPU_4BPP_FLATV
-	if (CF == 32 && qpsx_gpu_poly_span_4bpp_flatv(gpu_unai, pDst, count))
+	if (CF == 32 && count >= QPSX_GPU_4BPP_FLATV_MIN_PIXELS &&
+	    qpsx_gpu_poly_span_4bpp_flatv(gpu_unai, pDst, count))
 		return;
 #endif
 #if QPSX_GPU_LINEAR_4BPP

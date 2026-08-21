@@ -98,6 +98,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_4BPP_FLATV
 #define QPSX_GPU_4BPP_FLATV 0
 #endif
+#ifndef QPSX_GPU_4BPP_FLATV_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_MIN_PIXELS 16
+#endif
 
 #ifdef PSXREC
 extern "C" void recLogTelemetry(void);
@@ -123,7 +126,8 @@ int psxInit() {
 	     QPSX_GPU_PACKED_TILE_WRITES, QPSX_GPU_PACKED_SPRITE_4BPP,
 	     QPSX_GPU_RUNTIME_METRICS, QPSX_MIPS_VIRTUAL_MIRRORING,
 	     QPSX_MIPS_FAST_MEM_CONVERT);
-	xlog("QPSX: gpu_flatv=%d", QPSX_GPU_4BPP_FLATV);
+	xlog("QPSX: gpu_flatv=%d min_pixels=%d", QPSX_GPU_4BPP_FLATV,
+	     QPSX_GPU_4BPP_FLATV_MIN_PIXELS);
 
 #ifdef PSXREC
 	#ifndef interpreter_none
