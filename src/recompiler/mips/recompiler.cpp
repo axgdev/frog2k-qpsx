@@ -113,6 +113,14 @@ extern "C" void xlog(const char *fmt, ...);
 #define QPSX_MIPS_DISPATCH_CACHE_GP 0
 #endif
 
+/* MIPS32r1 branch-likely instructions annul their delay slot when the
+ * common cache-hit condition is false.  The dispatch loop uses this to avoid
+ * issuing two otherwise-empty delay-slot instructions on every cache hit;
+ * keep it opt-in until the physical CPU confirms its branch timing. */
+#ifndef QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+#define QPSX_MIPS_DISPATCH_BRANCH_LIKELY 0
+#endif
+
 
 /* Fold a bounded number of short, forward unconditional jumps into the
  * current translated block.  This removes an indirect-dispatch round trip
@@ -989,10 +997,19 @@ __asm__ __volatile__ (
 "lw    $t0, 4($t6)                            \n" // cached host code
 "lw    $t4, %[psxRegs_io_cycle_ctr_off]($fp)  \n" // $t4 = psxRegs.io_cycle_counter
 "addu  $t3, $t3, $v1                          \n" // $t3 = psxRegs.cycle + $v1
+#if QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+/* The miss path needs t1 = (pc << 4).  Compute it in the taken delay slot;
+ * on a hit both branch-likely delay slots are annulled. */
+"bnel  $t5, $v0, dispatch_cache_miss%=        \n"
+"sll   $t1, $v0, 4                            \n"
+"beqzl $t0, dispatch_cache_miss%=             \n"
+"sll   $t1, $v0, 4                            \n"
+#else
 "bne   $t5, $v0, dispatch_cache_miss%=        \n"
 "nop                                           \n"
 "beqz  $t0, dispatch_cache_miss%=             \n"
 "nop                                           \n"
+#endif
 
 "dispatch_cache_ready%=:                      \n"
 
@@ -1019,7 +1036,9 @@ __asm__ __volatile__ (
 // Valid RAM PCs have bit 27 clear; the 0xbfc00000 BIOS region has it set.
 // Shift pairs mask to the 2 MiB RAM or 512 KiB ROM allocation respectively.
 "dispatch_cache_miss%=:                       \n"
+#if !QPSX_MIPS_DISPATCH_BRANCH_LIKELY
 "sll   $t1, $v0, 4                            \n"
+#endif
 "bltz  $t1, dispatch_cache_miss_rom%=         \n"
 "sll   $t2, $v0, 11                           \n" // <BD> discard bits above RAM offset
 "srl   $t2, $t2, 11                           \n" // $t2 = pc & 0x001fffff
