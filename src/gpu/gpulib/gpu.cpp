@@ -587,7 +587,11 @@ qpsx_gpu_do_cmd_buffer_body(uint32_t *data, int count,
   return count - pos;
 }
 
-static inline void
+/* This runs once per completed command buffer (and once per safe chain), not
+ * per packet.  Keeping it out-of-line prevents the fast chain loop from
+ * carrying two copies of the status/fb publication sequence in the tiny
+ * instruction cache. */
+QPSX_HOT_GPU static noinline void
 qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3)
 {
   gpu.status.reg &= ~0x1fff;
