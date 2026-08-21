@@ -23,8 +23,12 @@
 #include "psxmem.h"
 #include "profiler.h"
 
-// MIPS platforms have hardware divider, faster than 64KB LUT + UNR algo
-#if defined(__mips__)
+// MIPS platforms have hardware divider, faster than 64KB LUT + UNR algo.
+// Keep a build switch for device A/B tests; native divide remains default.
+#ifndef QPSX_GTE_NATIVE_DIVIDE
+#define QPSX_GTE_NATIVE_DIVIDE 1
+#endif
+#if defined(__mips__) && QPSX_GTE_NATIVE_DIVIDE
 #define GTE_USE_NATIVE_DIVIDE
 #endif
 
@@ -35,6 +39,20 @@
 //  still set for other calculations.
 #if !(defined(__arm__) || defined(__mips__))
 #define PARANOID_OVERFLOW_CHECKING
+#endif
+
+/* RTPS/RTPT dominate the measured GTE time on the HC15xx.  Keep the rest of
+ * the core at the cache-friendly -O2 setting, but allow a benchmarked build
+ * to give only these two straight-line kernels GCC's stronger register
+ * allocation.  The attribute is ignored unless the frontend explicitly
+ * enables QPSX_GTE_HOT_O3. */
+#ifndef QPSX_GTE_HOT_O3
+#define QPSX_GTE_HOT_O3 0
+#endif
+#if QPSX_GTE_HOT_O3 && defined(__GNUC__)
+#define QPSX_GTE_HOT __attribute__((optimize("O3")))
+#else
+#define QPSX_GTE_HOT
 #endif
 
 #define VX(n) (n < 3 ? psxRegs.CP2D.p[n << 1].sw.l : psxRegs.CP2D.p[9].sw.l)
@@ -397,7 +415,7 @@ void gteSWC2(void) {
 	psxMemWrite32(_oB_, gtecalcMFC2(_Rt_));
 }
 
-void gteRTPS(void) {
+QPSX_GTE_HOT void gteRTPS(void) {
 	int quotient;
 
 #ifdef GTE_LOG
@@ -432,7 +450,7 @@ void gteRTPS(void) {
 	PROFILE_END(PROF_GTE_RTPS);
 }
 
-void gteRTPT(void) {
+QPSX_GTE_HOT void gteRTPT(void) {
 	int quotient;
 	int v;
 	s32 vx, vy, vz;

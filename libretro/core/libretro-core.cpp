@@ -3859,7 +3859,9 @@ void retro_run(void)
     if (g_target_speed >= 100) {
         /* Normal speed - no throttling, just execute */
         profiler_frame_start();
+        PROFILE_START(PROF_CPU_TOTAL);
         psxCpu->Execute();
+        PROFILE_END(PROF_CPU_TOTAL);
         profiler_frame_end();
     } else {
         frame_throttle_acc += g_target_speed;
@@ -3867,7 +3869,9 @@ void retro_run(void)
             frame_throttle_acc -= 100;
             /* Emulate this frame */
             profiler_frame_start();
+            PROFILE_START(PROF_CPU_TOTAL);
             psxCpu->Execute();
+            PROFILE_END(PROF_CPU_TOTAL);
             profiler_frame_end();
         } else {
             /* Skip emulation - frame dupe (output previous frame buffer) */

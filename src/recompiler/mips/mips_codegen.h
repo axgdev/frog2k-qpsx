@@ -50,7 +50,8 @@
  *                  Reduces redundant loads from stack in exit code.
  *                  -> A jump to C code via JAL() invalidates cached value.
  *
- * MIPSREG_S0..S7  Reserved for reg allocator.
+ * MIPSREG_S0..S7  Reserved for reg allocator, except that the Linux NOMMU
+ *                  cache-aware build can reserve S7 for the psxM base.
  *
  * MIPSREG_S8      Holds pointer to psxRegs struct, a.k.a. PERM_REG_1.
  */
@@ -103,6 +104,16 @@ typedef enum {
 
 /* PERM_REG_1 is pointer to psxRegs struct */
 #define PERM_REG_1           MIPSREG_S8
+
+/* A generated RAM access normally reloads psxM from psxRegs for every load
+ * or store series.  On the NOMMU target, S7 is callee-saved and can safely
+ * hold that base across generated blocks and C helper calls. */
+#ifndef QPSX_MIPS_PSMEM_REG
+#define QPSX_MIPS_PSMEM_REG 0
+#endif
+#if QPSX_MIPS_PSMEM_REG
+#define PERM_REG_2           MIPSREG_S7
+#endif
 
 
 /* NOTE: it is assumed the platform has basic MIPS32r1 ISA, i.e. it has at

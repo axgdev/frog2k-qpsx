@@ -1,5 +1,9 @@
 #define REG_CACHE_START		MIPSREG_S0
+#if QPSX_MIPS_PSMEM_REG
+#define REG_CACHE_END		MIPSREG_S7
+#else
 #define REG_CACHE_END		(MIPSREG_S7+1)
+#endif
 
 #define REG_LOAD		0
 #define REG_FIND		1

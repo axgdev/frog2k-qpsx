@@ -269,7 +269,12 @@ static u32 emitAddressConversion(const u32 op_rs,
 		//            handle the three 2MB PS1 RAM mirrors. Caller knows it can
 		//            only use the converted base reg to access PS1 RAM.
 
+			#if QPSX_MIPS_PSMEM_REG
+			/* Copy the stable base; tmp_reg is filled by the mask below. */
+			MOV(desired_reg, PERM_REG_2);
+			#else
 		LW(desired_reg, PERM_REG_1, off(psxM));
+		#endif
 #ifdef HAVE_MIPS32R2_EXT_INS
 		EXT(tmp_reg, rs, 0, 21);  // tmp_reg = rs & 0x001f_ffff
 #else
@@ -1044,7 +1049,11 @@ static void general_loads_stores(const int  count,
 							NOP();                               // <BD>
 							fixup_branch(label_slow_1);
 							fixup_branch(label_slow_2);
-							JAL(write_func[WIDTH_32]);           // helper: addr already in $a0
+						/* The preceding tests prove a real 0x1f80xxxx hardware
+						 * address (not scratchpad).  Bypass psxMemWrite32's
+						 * duplicate region/LUT dispatch; psxHwWrite32 also handles
+						 * the ROM/cache-control cases used by the recompiler. */
+							JAL(psxHwWrite32);                  // addr already in $a0
 							MOV(MIPSREG_A1, rt);                 // <BD> value arg
 							fixup_branch(label_done);
 						}
@@ -1189,7 +1198,10 @@ static void general_loads_stores(const int  count,
 							NOP();                               // <BD>
 							fixup_branch(label_slow_1);
 							fixup_branch(label_slow_2);
-							JAL(read_func[WIDTH_32]);            // helper: addr already in $a0
+							/* As in the SW path, this is known 0x1f80xxxx
+							 * hardware, so avoid psxMemRead32's second region
+							 * dispatch and LUT lookup. */
+							JAL(psxHwRead32);                    // addr already in $a0
 							NOP();                               // <BD> (result not ready yet)
 							if (op_rt)
 								MOV(rt, MIPSREG_V0);

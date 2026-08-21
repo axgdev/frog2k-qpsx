@@ -75,6 +75,10 @@ extern "C" void xlog(const char *fmt, ...);
  */
 #define USE_DIRECT_FASTPATH_BLOCK_RETURN_JUMPS
 
+#ifndef QPSX_MIPS_PSMEM_REG
+#define QPSX_MIPS_PSMEM_REG 0
+#endif
+
 /* Const propagation is applied to addresses */
 #if defined(QPSX_ENABLE_MIPS_CONST_MEM) && QPSX_ENABLE_MIPS_CONST_MEM
 #define USE_CONST_ADDRESSES
@@ -146,19 +150,30 @@ static uptr psxRecLUT[0x10000];
 
 #if defined(QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH) && \
     QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH
+#ifndef QPSX_MIPS_DISPATCH_CACHE_ENTRIES
+#define QPSX_MIPS_DISPATCH_CACHE_ENTRIES 64
+#endif
+#if (QPSX_MIPS_DISPATCH_CACHE_ENTRIES < 1) || \
+    ((QPSX_MIPS_DISPATCH_CACHE_ENTRIES & \
+      (QPSX_MIPS_DISPATCH_CACHE_ENTRIES - 1)) != 0) || \
+    (QPSX_MIPS_DISPATCH_CACHE_ENTRIES > 2048)
+#error "QPSX_MIPS_DISPATCH_CACHE_ENTRIES must be a power of two <= 2048"
+#endif
+#define QPSX_MIPS_DISPATCH_CACHE_INDEX_MASK \
+	((QPSX_MIPS_DISPATCH_CACHE_ENTRIES - 1) * 4)
 /*
  * The NOMMU Linux port cannot mirror recRAM into the guest address space, so
  * every block dispatch otherwise reads both psxRecLUT and a widely scattered
- * recRAM slot. Keep recent PC-to-host-code translations in four HC15xx cache
- * lines (512 bytes, at most 3.1% of a 16 KiB D-cache). recClear() and
- * recReset() invalidate it alongside the authoritative block-pointer arrays.
+ * recRAM slot. Keep recent PC-to-host-code translations in a small direct-
+ * mapped cache. recClear() and recReset() invalidate it alongside the
+ * authoritative block-pointer arrays.
  */
 struct rec_dispatch_entry {
 	u32 pc;
 	u32 code;
 };
 
-static struct rec_dispatch_entry rec_dispatch_cache[64]
+static struct rec_dispatch_entry rec_dispatch_cache[QPSX_MIPS_DISPATCH_CACHE_ENTRIES]
 	__attribute__((aligned(128)));
 
 static inline void rec_dispatch_cache_clear()
@@ -723,6 +738,9 @@ __attribute__((noinline)) static void recFunc(void *fn)
 	__asm__ __volatile__ (
 		"addiu  $sp, $sp, -24                   \n"
 		"la     $fp, %[psxRegs]                 \n" // $fp = &psxRegs
+#if QPSX_MIPS_PSMEM_REG
+		"lw     $s7, 0(%[psxM_ptr])             \n" // $s7 = psxM base
+#endif
 		"lw     $v0, %[psxRegs_pc_off]($fp)     \n" // Blocks expect $v0 to contain PC val on entry
 		"la     $ra, block_return_addr%=        \n" // Load $ra with block_return_addr
 		"sw     $ra, 16($sp)                    \n" // Put 'block_return_addr' on stack
@@ -738,6 +756,9 @@ __attribute__((noinline)) static void recFunc(void *fn)
 		: // Input
 		  [fn]                   "r" (fn),
 		  [psxRegs]              "i" (&psxRegs),
+#if QPSX_MIPS_PSMEM_REG
+		  [psxM_ptr]             "d" (&psxM),
+#endif
 		  [psxRegs_pc_off]       "i" (off(pc)),   // Offset of psxRegs.pc in psxRegs
 		  [psxRegs_cycle_off]    "i" (off(cycle)) // Offset of psxRegs.cycle in psxRegs
 		: // Clobber - No need to list anything but 'saved' regs
@@ -793,6 +814,9 @@ __asm__ __volatile__ (
 
 // $fp/$s8 remains set to &psxRegs across all calls to blocks
 "move  $fp, %[psxRegs]                        \n"
+#if QPSX_MIPS_PSMEM_REG
+"lw    $s7, 0(%[psxM_ptr])                    \n" // $s7 = psxM base
+#endif
 
 // Set up our own stack frame. Should have 8-byte alignment, and have 16 bytes
 // empty at 0($sp) for use by functions called from within recompiled code.
@@ -858,7 +882,7 @@ __asm__ __volatile__ (
 // Infinite loop, blocks return here
 "loop%=:                                      \n"
 "lw    $t3, %[psxRegs_cycle_off]($fp)         \n" // $t3 = psxRegs.cycle
-"andi  $t2, $v0, 0x00fc                       \n" // 64-entry cache index
+"andi  $t2, $v0, %[dispatch_index_mask]       \n" // cache index
 "sll   $t2, $t2, 1                            \n" // eight bytes per entry
 "lw    $t1, f_off_dispatch_cache($sp)         \n"
 "addu  $t6, $t1, $t2                          \n" // $t6 = cache entry
@@ -958,6 +982,9 @@ __asm__ __volatile__ (
 : // Output
 : // Input
   [psxRegs]                    "d" (&psxRegs),
+#if QPSX_MIPS_PSMEM_REG
+  [psxM_ptr]                   "d" (&psxM),
+#endif
   [psxRegs_pc_off]             "i" (off(pc)),
   [psxRegs_cycle_off]          "i" (off(cycle)),
   [psxRegs_io_cycle_ctr_off]   "i" (off(io_cycle_counter)),
@@ -966,6 +993,7 @@ __asm__ __volatile__ (
   [recRAM]                     "d" (recRAM),
   [recROM]                     "d" (recROM),
   [dispatch_cache]             "d" (rec_dispatch_cache),
+  [dispatch_index_mask]        "i" (QPSX_MIPS_DISPATCH_CACHE_INDEX_MASK),
   [emu_frame_complete]         "d" (&emu_frame_complete)
 : // Clobber - No need to list anything but 'saved' regs
   "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "fp", "ra", "memory"
@@ -1633,6 +1661,9 @@ __attribute__((noinline)) static void recExecuteBlock(unsigned target_pc)
 		"sw    %[recRAM], block_off_recRAM($sp)         \n"
 		"sw    %[recROM], block_off_recROM($sp)         \n"
 		"move  $fp, %[psxRegs]                          \n"
+#if QPSX_MIPS_PSMEM_REG
+		"lw    $s7, 0(%[psxM_ptr])                      \n" // $s7 = psxM base
+#endif
 
 		// Derive the nested dispatcher's return address without a text relocation.
 		"bal   block_setup_return%=                     \n"
@@ -1713,6 +1744,9 @@ __attribute__((noinline)) static void recExecuteBlock(unsigned target_pc)
 		:
 		: [target_pc]                "d" (target_pc),
 		  [psxRegs]                  "d" (&psxRegs),
+#if QPSX_MIPS_PSMEM_REG
+		  [psxM_ptr]                 "d" (&psxM),
+#endif
 		  [psxRegs_pc_off]           "i" (off(pc)),
 		  [psxRegs_cycle_off]        "i" (off(cycle)),
 		  [psxRegs_io_cycle_ctr_off] "i" (off(io_cycle_counter)),
