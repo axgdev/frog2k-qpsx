@@ -47,7 +47,8 @@ unsigned short pad_read(int num);
 void video_flip(void);
 unsigned short *video_acquire_framebuffer(void);
 void video_flip_framebuffer(const unsigned short *buffer);
-/* Submit a native PS1 ARGB1555 VRAM window when the host can hand it to the
+/* Submit a native PS1 BGR555 VRAM window (red in bits 0..4) when the host can
+ * hand it to the
  * GE directly.  Returns non-zero when the platform consumed the raw frame;
  * callers must retain the RGB565 fallback otherwise. */
 int video_flip_vram(const unsigned short *buffer, unsigned width,

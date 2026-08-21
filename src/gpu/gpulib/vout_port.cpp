@@ -446,9 +446,10 @@ void vout_update(void)
 
 #if QPSX_GE_RAW_VRAM
 	/*
-	 * The PS1 GPU stores display pixels as native ARGB1555.  On the Linux
-	 * NOMMU target malloc returns a cached KSEG0 pointer, so the GE can read
-	 * that VRAM directly and perform the ARGB1555 -> RGB565 conversion while
+	 * The PS1 GPU stores display pixels as native BGR555 (red in bits 0..4).
+	 * On the Linux NOMMU target malloc returns a cached KSEG0 pointer, so the
+	 * GE can read that VRAM directly and perform the BGR555 -> RGB565
+	 * conversion while
 	 * it stretches to scanout.  This removes the per-pixel CPU conversion in
 	 * all ordinary 240-line modes.  480-line/interlaced output and 24-bit
 	 * output are deliberately left on the exact RGB565 fallback: their rows
