@@ -61,6 +61,9 @@
 #ifndef QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS
 #define QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS 16
 #endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_CACHE
+#define QPSX_GPU_4BPP_GOURAUD_CACHE 0
+#endif
 #ifndef QPSX_GPU_4BPP_FLATV
 #define QPSX_GPU_4BPP_FLATV 0
 #endif
@@ -529,6 +532,32 @@ static inline bool qpsx_gpu_poly_span_4bpp_linear(const gpu_unai_t &gpu_unai,
 #else
 #define QPSX_GPU_GOURAUD_FLATV_NOINLINE
 #endif
+#if QPSX_GPU_4BPP_GOURAUD_CACHE
+/* The fast Gouraud operation only consumes these three quantized 5-bit
+ * light values from gCol. Cache the sixteen CLUT results while that key is
+ * unchanged. The cache is deliberately a 32-byte span-local object rather
+ * than a 1 KiB global table: this keeps the working set friendly to the
+ * SF2000's tiny D-cache and avoids rebuilding a full table for short spans. */
+static inline u32 qpsx_gpu_gouraud_light_key(u32 gCol)
+{
+	return (gCol >> 27) |
+	       (((gCol >> 16) & 0x1fu) << 5) |
+	       (((gCol >> 5) & 0x1fu) << 10);
+}
+
+static inline u16 qpsx_gpu_gouraud_cache_color(u16 src, u32 index,
+						 u32 gCol, u16 *palette,
+						 u32 *valid_mask)
+{
+	const u32 bit = 1u << index;
+	if (!(*valid_mask & bit)) {
+		palette[index] = src ?
+			(gpuLightingTXTGouraud_Fast(src, gCol) | (src & 0x8000)) : 0;
+		*valid_mask |= bit;
+	}
+	return palette[index];
+}
+#endif
 /* CF=161 is the measured lit 4bpp driver.  Accept only a full 256x256
  * window, constant V, unit U, and a span proven not to wrap. */
 static QPSX_GPU_GOURAUD_FLATV_NOINLINE bool
@@ -549,6 +578,112 @@ qpsx_gpu_poly_span_4bpp_gouraud_flatv(const gpu_unai_t &gpu_unai,
 	const u16 *cba = gpu_unai.CBA;
 	u32 l_gCol = gpu_unai.gCol;
 	const u32 l_gInc = gpu_unai.gInc;
+#if QPSX_GPU_4BPP_GOURAUD_CACHE
+	/* This look-ahead is only a profitability gate. Every lookup below still
+	 * checks the exact quantized key, so a crossing at any later pixel remains
+	 * pixel-identical to the direct fast-lighting path. */
+	const u32 first_key = qpsx_gpu_gouraud_light_key(l_gCol);
+	const u32 probe_key = qpsx_gpu_gouraud_light_key(l_gCol + (l_gInc << 2));
+	if (first_key == probe_key) {
+		u16 palette[16];
+		u32 valid_mask = 0;
+		u32 cache_key = ~0u;
+		if (texel & 1u) {
+			const u32 key = qpsx_gpu_gouraud_light_key(l_gCol);
+			if (key != cache_key) {
+				cache_key = key;
+				valid_mask = 0;
+			}
+			const u32 index = *row++ >> 4;
+			const u16 src = cba[index];
+			if (src)
+				*pDst = qpsx_gpu_gouraud_cache_color(src, index, l_gCol,
+								     palette, &valid_mask);
+			++pDst;
+			l_gCol += l_gInc;
+			--count;
+		}
+		const bool pair_aligned = !((uintptr_t)pDst & 2u);
+		if (pair_aligned) {
+			while (count >= 2) {
+				const u8 packed = *row++;
+				const u32 key0 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key0 != cache_key) {
+					cache_key = key0;
+					valid_mask = 0;
+				}
+				const u32 index0 = packed & 0xfu;
+				const u16 src0 = cba[index0];
+				u16 out0 = 0;
+				if (src0)
+					out0 = qpsx_gpu_gouraud_cache_color(src0, index0, l_gCol,
+									       palette, &valid_mask);
+				l_gCol += l_gInc;
+				const u32 key1 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key1 != cache_key) {
+					cache_key = key1;
+					valid_mask = 0;
+				}
+				const u32 index1 = packed >> 4;
+				const u16 src1 = cba[index1];
+				u16 out1 = 0;
+				if (src1)
+					out1 = qpsx_gpu_gouraud_cache_color(src1, index1, l_gCol,
+									       palette, &valid_mask);
+				l_gCol += l_gInc;
+				if (src0 && src1)
+					*(u32 *)pDst = (u32)out0 | ((u32)out1 << 16);
+				else {
+					if (src0) pDst[0] = out0;
+					if (src1) pDst[1] = out1;
+				}
+				pDst += 2;
+				count -= 2;
+			}
+		} else {
+			while (count >= 2) {
+				const u8 packed = *row++;
+				const u32 key0 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key0 != cache_key) {
+					cache_key = key0;
+					valid_mask = 0;
+				}
+				const u32 index0 = packed & 0xfu;
+				const u16 src0 = cba[index0];
+				if (src0)
+					pDst[0] = qpsx_gpu_gouraud_cache_color(src0, index0, l_gCol,
+									      palette, &valid_mask);
+				l_gCol += l_gInc;
+				const u32 key1 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key1 != cache_key) {
+					cache_key = key1;
+					valid_mask = 0;
+				}
+				const u32 index1 = packed >> 4;
+				const u16 src1 = cba[index1];
+				if (src1)
+					pDst[1] = qpsx_gpu_gouraud_cache_color(src1, index1, l_gCol,
+									      palette, &valid_mask);
+				l_gCol += l_gInc;
+				pDst += 2;
+				count -= 2;
+			}
+		}
+		if (count) {
+			const u32 key = qpsx_gpu_gouraud_light_key(l_gCol);
+			if (key != cache_key) {
+				cache_key = key;
+				valid_mask = 0;
+			}
+			const u32 index = *row & 0xfu;
+			const u16 src = cba[index];
+			if (src)
+				*pDst = qpsx_gpu_gouraud_cache_color(src, index, l_gCol,
+								     palette, &valid_mask);
+		}
+		return true;
+	}
+#endif
 	if (texel & 1u) {
 		const u16 src = cba[*row++ >> 4];
 		if (src)
