@@ -48,6 +48,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GTE_HOT_O3
 #define QPSX_GTE_HOT_O3 0
 #endif
+#ifndef QPSX_GTE_OPCODE_COUNTER
+#define QPSX_GTE_OPCODE_COUNTER 0
+#endif
 #ifndef QPSX_MIPS_PSMEM_REG
 #define QPSX_MIPS_PSMEM_REG 0
 #endif
@@ -293,6 +296,9 @@ int psxInit() {
 void psxReset() {
 	xlog("QPSX: >>> psxReset() START <<<\n");
 	xlog("QPSX: Config.HLE=%d\n", Config.HLE);
+	#if QPSX_GTE_OPCODE_COUNTER
+	qpsx_gte_opcode_counter_reset();
+	#endif
 
 	psxCpu->Reset();
 	xlog("QPSX: psxCpu->Reset() done\n");
@@ -338,6 +344,9 @@ void psxReset() {
 void psxShutdown() {
 	// Shutdown CPU *before* calling psxMemShutdown(), to allow it to unmap
 	//  psxM,psxH etc, if it has done so.
+	#if QPSX_GTE_OPCODE_COUNTER
+	qpsx_gte_opcode_counter_report();
+	#endif
 #ifdef PSXREC
 	/* This is intentionally once per emulator lifetime: counters are updated
 	 * only when a block is compiled, so this log has no steady-state cost. */

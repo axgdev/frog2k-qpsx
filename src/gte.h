@@ -62,4 +62,14 @@ void gtecalcCTC2(u32 value, int reg);
 // v294: Update function pointer dispatch when ASM options change
 void gte_update_dispatch(void);
 
+/* Optional workload diagnostic.  Normal builds do not even export these
+ * symbols; the counter build reports once at shutdown. */
+#ifndef QPSX_GTE_OPCODE_COUNTER
+#define QPSX_GTE_OPCODE_COUNTER 0
+#endif
+#if QPSX_GTE_OPCODE_COUNTER
+void qpsx_gte_opcode_counter_reset(void);
+void qpsx_gte_opcode_counter_report(void);
+#endif
+
 #endif /* __GTE_H__ */
