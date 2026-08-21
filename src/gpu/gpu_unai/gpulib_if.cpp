@@ -195,13 +195,13 @@ int renderer_init(void)
   // s_invTable
   for(int i=1;i<=(1<<TABLE_BITS);++i)
   {
-    double v = 1.0 / double(i);
 #ifdef GPU_TABLE_10_BITS
-    v *= double(0xffffffff>>1);
+    const uint32_t numerator = 0x7fffffffu;
 #else
-    v *= double(0x80000000);
+    const uint32_t numerator = 0x80000000u;
 #endif
-    s_invTable[i-1]=s32(v);
+    /* Keep startup and runtime entirely integer on the no-FPU target. */
+    s_invTable[i-1] = (s32)(numerator / (uint32_t)i);
   }
   GPUIF_LOG("s_invTable built");
 #endif

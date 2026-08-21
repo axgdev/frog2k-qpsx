@@ -78,6 +78,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_RUNTIME_METRICS
 #define QPSX_GPU_RUNTIME_METRICS 0
 #endif
+#ifndef QPSX_GPU_RECIP_TABLE_BITS
+#define QPSX_GPU_RECIP_TABLE_BITS 0
+#endif
 #if defined(SHMEM_MIRRORING) || defined(TMPFS_MIRRORING)
 #define QPSX_MIPS_VIRTUAL_MIRRORING 1
 #else
@@ -186,7 +189,7 @@ int psxInit() {
 	     QPSX_MIPS_PERSISTENT_RETURN_RA);
 	xlog("QPSX: fold=%d/%d/%d profiler=%d telemetry=%d raw_vram=%d gpu_fixed=%d "
 	     "gpu_light_fast=%d gpu_linear4=%d gpu_tile32=%d gpu_sprite4=%d "
-	     "gpu_poly32=%d gpu_gflatv=%d gpu_hot_order=%d gpu_metrics=%d "
+	     "gpu_poly32=%d gpu_gflatv=%d gpu_hot_order=%d gpu_metrics=%d gpu_recip=%d "
 	     "mirror=%d fast_mem=%d",
 	     QPSX_MIPS_FOLD_DIRECT_JUMPS,
 	     QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX, QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES,
@@ -197,7 +200,8 @@ int psxInit() {
 	     QPSX_GPU_PACKED_POLY_WRITES,
 	     QPSX_GPU_4BPP_GOURAUD_FLATV,
 	     QPSX_GPU_HOT_DRIVER_ORDER,
-	     QPSX_GPU_RUNTIME_METRICS, QPSX_MIPS_VIRTUAL_MIRRORING,
+	     QPSX_GPU_RUNTIME_METRICS, QPSX_GPU_RECIP_TABLE_BITS,
+	     QPSX_MIPS_VIRTUAL_MIRRORING,
 	     QPSX_MIPS_FAST_MEM_CONVERT);
 	xlog("QPSX: mips_opts fuzzy_addiu=%d",
 	     QPSX_MIPS_PROPAGATE_FUZZY_ADDR);

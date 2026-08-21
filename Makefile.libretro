@@ -37,6 +37,7 @@ QPSX_MIPS_ASM_MEM_READS ?= 0
 QPSX_HLE_LAZY_EVENT_CHECK ?= 0
 QPSX_GPU_GOURAUD_LINE_FLATFAST ?= 0
 QPSX_GE_RAW_VRAM ?= 0
+QPSX_GPU_RECIP_TABLE_BITS ?= 0
 # The frontend supplies a short hash of every QPSX tuning/build flag. Keep a
 # direct Makefile build attributable too; "untracked" is intentionally visible
 # rather than silently reusing a previous experiment's identity.
@@ -54,6 +55,7 @@ QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_HLE_LAZY_EVENT_CHECK=$(QPSX_HLE_LAZY_EVENT_CHECK) \
 	-DQPSX_GPU_GOURAUD_LINE_FLATFAST=$(QPSX_GPU_GOURAUD_LINE_FLATFAST) \
 	-DQPSX_GE_RAW_VRAM=$(QPSX_GE_RAW_VRAM) \
+	-DQPSX_GPU_RECIP_TABLE_BITS=$(QPSX_GPU_RECIP_TABLE_BITS) \
 	-DQPSX_BUILD_TAG=\"$(QPSX_BUILD_TAG)\" \
 	-DQPSX_BUILD_FINGERPRINT=\"$(QPSX_BUILD_FINGERPRINT)\" \
 	-DQPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)

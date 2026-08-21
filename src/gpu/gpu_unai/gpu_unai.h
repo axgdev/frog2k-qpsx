@@ -40,6 +40,18 @@
 //#define GPU_UNAI_USE_FLOAT_DIV_MULTINV // If GPU_UNAI_USE_FLOATMATH is defined,
                                          //  use multiply-by-inverse for division
 
+/* A small normalized reciprocal table is an optional Linux experiment.  The
+ * stock Linux build uses the exact MIPS integer divide because the historical
+ * 16-bit table consumed 256 KiB and polluted the 16 KiB D-cache.  A 8/10-bit
+ * table keeps the reciprocal path cache-sized and, unlike the float path,
+ * performs no FPU work on the target. */
+#ifndef QPSX_GPU_RECIP_TABLE_BITS
+#define QPSX_GPU_RECIP_TABLE_BITS 0
+#endif
+#if QPSX_GPU_RECIP_TABLE_BITS && !defined(GPU_UNAI_USE_INT_DIV_MULTINV)
+#define GPU_UNAI_USE_INT_DIV_MULTINV
+#endif
+
 /*
  * QPSX_080: GPU Optimization - Reciprocal Division
  *

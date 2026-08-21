@@ -77,8 +77,15 @@ INLINE float FloatInv(const float x)
 ///////////////////////////////////////////////////////////////////////////
 #ifdef GPU_UNAI_USE_INT_DIV_MULTINV
 
-//  big precision inverse table.
+// The reciprocal table is normally 16 bits for the original Unai build.
+// Linux can select a cache-sized 8/10-bit table through
+// QPSX_GPU_RECIP_TABLE_BITS; the normalized denominator logic below still
+// covers the complete signed denominator range with bounded precision loss.
+#if QPSX_GPU_RECIP_TABLE_BITS
+#define TABLE_BITS QPSX_GPU_RECIP_TABLE_BITS
+#else
 #define TABLE_BITS 16
+#endif
 s32 s_invTable[(1<<TABLE_BITS)];
 
 //senquack - MIPS32 happens to have same instruction/format:
