@@ -43,6 +43,16 @@
     .extern psxHwWrite32
     .extern psxHwWrite16
     .extern psxHwWrite8
+
+/* When the recompiler reserves $s7 for psxM, indirect read helpers are
+ * entered with that callee-saved register live.  Reusing it removes the
+ * global-pointer load from each RAM read.  Keep the global load for the
+ * generic ABI, where callers are not required to establish $s7. */
+#if defined(QPSX_MIPS_PSMEM_REG) && QPSX_MIPS_PSMEM_REG
+#define QPSX_ASM_HAS_PSMEM_REG 1
+#else
+#define QPSX_ASM_HAS_PSMEM_REG 0
+#endif
     .extern psxHwRead32
     .extern psxHwRead16
     .extern psxHwRead8
@@ -329,8 +339,12 @@ psxMemRead32_asm:
 
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read32:
+#if QPSX_ASM_HAS_PSMEM_REG
+    addu    $t4, $s7, $zero           /* t4 = live psxM base */
+#else
     la      $t4, psxM
     lw      $t4, 0($t4)              /* t4 = psxM base */
+#endif
     sll     $t5, $a0, 11             /* keep the low 21 address bits */
     srl     $t5, $t5, 11
     addu    $t4, $t4, $t5
@@ -408,8 +422,12 @@ psxMemRead16_asm:
 
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read16:
+#if QPSX_ASM_HAS_PSMEM_REG
+    addu    $t4, $s7, $zero
+#else
     la      $t4, psxM
     lw      $t4, 0($t4)
+#endif
     sll     $t5, $a0, 11
     srl     $t5, $t5, 11
     addu    $t4, $t4, $t5
@@ -485,8 +503,12 @@ psxMemRead8_asm:
 
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read8:
+#if QPSX_ASM_HAS_PSMEM_REG
+    addu    $t4, $s7, $zero
+#else
     la      $t4, psxM
     lw      $t4, 0($t4)
+#endif
     sll     $t5, $a0, 11
     srl     $t5, $t5, 11
     addu    $t4, $t4, $t5
