@@ -67,6 +67,12 @@
 #ifndef QPSX_GPU_4BPP_FLATV_MIN_PIXELS
 #define QPSX_GPU_4BPP_FLATV_MIN_PIXELS 16
 #endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW
+#define QPSX_GPU_4BPP_FLATV_ROW 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS 16
+#endif
 #ifndef QPSX_GPU_4BPP_PALETTE_LUT
 #define QPSX_GPU_4BPP_PALETTE_LUT 0
 #endif
@@ -230,6 +236,86 @@ qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 	return true;
 }
 #undef QPSX_GPU_FLATV_NOINLINE
+#endif
+
+#if QPSX_GPU_4BPP_FLATV_ROW
+/*
+ * The previous CF=32 flat-V experiment required the full 256x256 texture
+ * window and proved that U could not wrap.  That proof made the fast path
+ * miss many of the measured flat-V pixels.  This variant keeps the same
+ * exact texture-window semantics as the generic loop: it masks U once per
+ * texel, but hoists the constant V row address out of the loop.  It is
+ * intentionally out-of-line so the common renderer's I-cache footprint does
+ * not grow on a 16 KiB MIPS cache.  No blend, mask, lighting, or Gouraud work
+ * is present for CF=32, so a zero CLUT entry remains the only skipped pixel.
+ */
+#if defined(__GNUC__)
+#define QPSX_GPU_FLATV_ROW_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_FLATV_ROW_NOINLINE
+#endif
+static QPSX_GPU_FLATV_ROW_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_flatv_row(const gpu_unai_t &gpu_unai,
+					  u16 *pDst, u32 count)
+{
+	if (!count || gpu_unai.v_inc != 0)
+		return false;
+
+	u32 l_u = gpu_unai.u & gpu_unai.u_msk;
+	const u32 u_msk = gpu_unai.u_msk;
+	const s32 u_inc = gpu_unai.u_inc;
+	const u8 *row = ((const u8 *)gpu_unai.TBA) +
+				(((gpu_unai.v & gpu_unai.v_msk) << 1) & (0xffu << 11));
+	const u16 *cba = gpu_unai.CBA;
+
+	/* The common unit-U case consumes two texels from one source byte.  Only
+	 * use the paired loop when the texture-window mask cannot wrap during the
+	 * span; the general loop below is exact for every other increment/window. */
+	if (u_inc == (1 << FIXED_BITS)) {
+		const u32 texel = l_u >> FIXED_BITS;
+		const u32 max_texel = u_msk >> FIXED_BITS;
+		if (texel <= max_texel && count <= max_texel - texel + 1u) {
+			const u8 *packed_row = row + (texel >> 1);
+			if (texel & 1u) {
+				const u16 src = cba[*packed_row >> 4];
+				if (src)
+					*pDst = src;
+				++pDst;
+				++packed_row;
+				--count;
+			}
+			while (count >= 2) {
+				const u8 packed = *packed_row++;
+				const u16 src0 = cba[packed & 0xf];
+				const u16 src1 = cba[packed >> 4];
+				if (src0)
+					pDst[0] = src0;
+				if (src1)
+					pDst[1] = src1;
+				pDst += 2;
+				count -= 2;
+			}
+			if (count) {
+				const u16 src = cba[*packed_row & 0xf];
+				if (src)
+					*pDst = src;
+			}
+			return true;
+		}
+	}
+
+	do {
+		const u32 tu = l_u >> FIXED_BITS;
+		const u8 packed = row[tu >> 1];
+		const u16 src = cba[(packed >> ((tu & 1u) << 2)) & 0xf];
+		if (src)
+			*pDst = src;
+		++pDst;
+		l_u = (l_u + u_inc) & u_msk;
+	} while (--count);
+	return true;
+}
+#undef QPSX_GPU_FLATV_ROW_NOINLINE
 #endif
 
 #ifdef __arm__
@@ -989,6 +1075,11 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 #if QPSX_GPU_4BPP_FLATV
 	if (CF == 32 && count >= QPSX_GPU_4BPP_FLATV_MIN_PIXELS &&
 	    qpsx_gpu_poly_span_4bpp_flatv(gpu_unai, pDst, count))
+		return;
+#endif
+#if QPSX_GPU_4BPP_FLATV_ROW
+	if (CF == 32 && count >= QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS &&
+	    qpsx_gpu_poly_span_4bpp_flatv_row(gpu_unai, pDst, count))
 		return;
 #endif
 #if QPSX_GPU_LINEAR_4BPP

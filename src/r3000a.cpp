@@ -110,6 +110,12 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_4BPP_FLATV_MIN_PIXELS
 #define QPSX_GPU_4BPP_FLATV_MIN_PIXELS 16
 #endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW
+#define QPSX_GPU_4BPP_FLATV_ROW 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS 16
+#endif
 #ifndef QPSX_GPU_4BPP_PALETTE_LUT
 #define QPSX_GPU_4BPP_PALETTE_LUT 0
 #endif
@@ -170,8 +176,9 @@ int psxInit() {
 	     QPSX_GPU_HOT_DRIVER_ORDER,
 	     QPSX_GPU_RUNTIME_METRICS, QPSX_MIPS_VIRTUAL_MIRRORING,
 	     QPSX_MIPS_FAST_MEM_CONVERT);
-	xlog("QPSX: gpu_flatv=%d min_pixels=%d palette_lut=%d",
+	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d",
 	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
+	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,
 	     QPSX_GPU_4BPP_PALETTE_LUT);
 
 #ifdef PSXREC
