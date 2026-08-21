@@ -152,6 +152,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_HOT_DRIVER_ORDER
 #define QPSX_GPU_HOT_DRIVER_ORDER 0
 #endif
+#ifndef QPSX_GPU_POLY_2043_FAST
+#define QPSX_GPU_POLY_2043_FAST 0
+#endif
 #ifndef QPSX_HOT_LAYOUT
 #define QPSX_HOT_LAYOUT 0
 #endif
@@ -239,8 +242,8 @@ int psxInit() {
 	     QPSX_LINUX_RAM_HELPER_FASTPATH, QPSX_MIPS_ASM_MEM_READS,
 	     QPSX_HLE_LAZY_EVENT_CHECK, QPSX_PERFORMANCE_FRAME_MARKERS,
 	     QPSX_GPU_DIRECT_PACKET);
-	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d",
-	     QPSX_GPU_GOURAUD_LINE_FLATFAST);
+	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d poly2043_fast=%d",
+	     QPSX_GPU_GOURAUD_LINE_FLATFAST, QPSX_GPU_POLY_2043_FAST);
 	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d gcache=%d fullmask=%d fullmask_min=%d pack4=%d hot_layout=%d phase_metrics=%d",
 	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
 	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,

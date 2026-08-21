@@ -18,3 +18,4 @@ Thumbs.db
 # Logs
 *.log
 .qpsx-build-config
+/tests/gpu_poly2043_diff
