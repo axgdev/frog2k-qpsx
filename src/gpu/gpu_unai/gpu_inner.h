@@ -380,6 +380,16 @@ static void gpuTileSpanFn(u16 *pDst, u32 count, u16 data)
 			}
 			const u32 packed = (u32)data | ((u32)data << 16);
 			u32 *pDst32 = (u32 *)pDst;
+			/* Keep the branch rate of the old eight-pixel unroll while
+			 * retaining the two-pixels-per-store reduction. */
+			while (count >= 8) {
+				pDst32[0] = packed;
+				pDst32[1] = packed;
+				pDst32[2] = packed;
+				pDst32[3] = packed;
+				pDst32 += 4;
+				count -= 8;
+			}
 			while (count >= 2) {
 				*pDst32++ = packed;
 				count -= 2;
