@@ -43,15 +43,18 @@
 /*
  * QPSX_080: GPU Optimization - Reciprocal Division
  *
- * Enabled for SF2000 (MIPS32 without FPU). Replaces expensive integer
- * division (~35 cycles) with multiply-by-reciprocal (~6 cycles).
- * Uses 512-entry lookup table (2KB) for reciprocals.
+ * Replaces integer division with multiply-by-reciprocal on platforms where
+ * the lookup table is a good trade. The table is 256 KiB in this version,
+ * so Linux on the cache-constrained HC15xx uses exact MIPS integer division
+ * during polygon setup instead.
  *
  * Speedup: ~5-10% for polygon-heavy scenes
  * Visual impact: Minimal (slight rounding differences, usually invisible)
  */
+#if !defined(QPSX_PLATFORM_LINUX) || !QPSX_PLATFORM_LINUX
 #define GPU_UNAI_USE_INT_DIV_MULTINV   // If GPU_UNAI_USE_FLOATMATH is *not*
                                          //  defined, use old inaccurate division
+#endif
 
 /*
  * QPSX_081: GPU Optimization - Fast Lighting

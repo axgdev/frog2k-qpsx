@@ -742,7 +742,27 @@ static void PolyNULL(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 typedef void (*PP)(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count);
 
 // Template instantiation helper macros
-#define TI(cf) gpuPolySpanFn<(cf)>
+/*
+ * Several command bits have no effect in particular span families. Map those
+ * table entries onto one canonical instantiation so taking every driver's
+ * address does not force the compiler to emit identical copies. This changes
+ * neither the table layout nor the inner-loop decisions that can be reached:
+ *
+ * - blend mode is unused when blending is disabled;
+ * - lighting is unused for untextured polygons;
+ * - Gouraud is unused for an unlit texture;
+ * - dithering needs Gouraud on untextured spans or lighting on textures;
+ * - display downsampling's blit mask is unused for untextured polygons.
+ */
+#define POLY_CANONICAL_FLAGS(cf) ( \
+	((cf) & (0x02 | 0x04 | 0x60 | 0x100)) | \
+	(((cf) & 0x02) ? ((cf) & 0x18) : 0) | \
+	(((cf) & 0x60) ? ((cf) & 0x01) : 0) | \
+	((!((cf) & 0x60) || ((cf) & 0x01)) ? ((cf) & 0x80) : 0) | \
+	(((!((cf) & 0x60) && ((cf) & 0x80)) || \
+	  (((cf) & 0x60) && ((cf) & 0x01))) ? ((cf) & 0x200) : 0) | \
+	(((cf) & 0x60) ? ((cf) & 0x400) : 0))
+#define TI(cf) gpuPolySpanFn<POLY_CANONICAL_FLAGS(cf)>
 #define TN     PolyNULL
 #define TIBLOCK(ub) \
 	TI((ub)|0x00), TI((ub)|0x01), TI((ub)|0x02), TI((ub)|0x03), TI((ub)|0x04), TI((ub)|0x05), TI((ub)|0x06), TI((ub)|0x07), \
@@ -786,3 +806,4 @@ const PP gpuPolySpanDrivers[2048] = {
 #undef TI
 #undef TN
 #undef TIBLOCK
+#undef POLY_CANONICAL_FLAGS
