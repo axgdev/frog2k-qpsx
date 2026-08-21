@@ -92,17 +92,11 @@ int renderer_init(void)
   // Configuration options
   GPUIF_LOG("Setting config from gpu_unai_config_ext...");
   gpu_unai.config = gpu_unai_config_ext;
-#ifdef GPU_UNAI_HALF_RES
-  // QPSX: half-res rasterization by default on the SF2000 - the host GE
-  // upscaler doubles the compacted framebuffer back to full screen, so
-  // this is a pure fill-rate win. Toggle by dropping the define.
-  gpu_unai.config.half_res = 1;
-#endif
   //senquack - disabled, not sure this is needed and would require modifying
   // sprite-span functions, perhaps unnecessarily. No Abe Oddysey hack was
   // present in latest PCSX4ALL sources we were using.
   //gpu_unai.config.enableAbbeyHack = gpu_unai_config_ext.abe_hack;
-  gpu_unai.ilace_mask = GpuEffectiveIlaceMask();
+  gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
   GPUIF_LOG("Config set OK");
 
 #ifdef GPU_UNAI_USE_INT_DIV_MULTINV
@@ -159,26 +153,18 @@ void renderer_notify_res_change(void)
     //  480 vertical mode, or, optionally, force it for all video modes)
 
     if (gpu.screen.vres == 480) {
-      if (gpu_unai.config.half_res) {
-        gpu_unai.ilace_mask = 1; // Every other field (half the lines)
-      } else if (gpu_unai.config.ilace_force) {
+      if (gpu_unai.config.ilace_force) {
         gpu_unai.ilace_mask = 3; // Only need 1/4 of lines
       } else {
         gpu_unai.ilace_mask = 1; // Only need 1/2 of lines
       }
     } else {
       // Vert resolution changed from 480 to lower one
-      if (gpu_unai.config.half_res)
-        gpu_unai.ilace_mask = 1; // 240p: skip every other line
-      else
-        gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
+      gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
     }
   } else {
     gpu_unai.ilace_mask = 0;
   }
-
-  /* Let vout_update() compact the same lines the rasterizers skipped. */
-  gpu_out_ilace_mask = gpu_unai.ilace_mask;
 
   /*
   printf("res change hres: %d   vres: %d   depth: %d   ilace_mask: %d\n",
@@ -263,9 +249,8 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
   uint32_t *list_end = list + list_len;
 
   //TODO: set ilace_mask when resolution changes instead of every time,
-  // eliminate #ifdef below. QPSX: fold half_res in here too, otherwise
-  // this per-list reset clobbers the res-change mask before rasterization.
-  gpu_unai.ilace_mask = GpuEffectiveIlaceMask();
+  // eliminate #ifdef below.
+  gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
 
 #ifdef HAVE_PRE_ARMV7 /* XXX */
   gpu_unai.ilace_mask |= gpu.status.interlace;

@@ -36,12 +36,6 @@ extern volatile int skip_video_output;
 /* v295: GPU frame counter - counts ACTUAL rendered frames (not skipped/duped) */
 volatile int gpu_frame_count = 0;
 
-/* QPSX half-res: line-skip mask applied by vout_update() and the height of
- * the compacted output rows it produced. video_flip() presents only the
- * compacted rows; the host upscaler restores full screen size. */
-volatile int gpu_out_ilace_mask = 0;
-volatile int gpu_out_height = SCREEN_HEIGHT;
-
 static unsigned tick_counter = 0;
 
 unsigned get_ticks(void) { return tick_counter++; }
@@ -103,15 +97,12 @@ void video_flip(void)
      * to reuse previous frame. This is faster than sending same data again.
      * IMPORTANT: We must still call video_cb for profiler timing to work!
      */
-    int out_height = gpu_out_height;
-    if (out_height <= 0 || out_height > SCREEN_HEIGHT)
-        out_height = SCREEN_HEIGHT;
     if (skip_video_output) {
-        video_cb(NULL, SCREEN_WIDTH, out_height, SCREEN_WIDTH * 2);
+        video_cb(NULL, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
     } else if (SCREEN) {
         /* v295: Count ACTUAL rendered frames (not skipped) */
         gpu_frame_count++;
-        video_cb(SCREEN, SCREEN_WIDTH, out_height, SCREEN_WIDTH * 2);
+        video_cb(SCREEN, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
     }
 }
 

@@ -108,7 +108,7 @@ static void gpuReset(void)
 
 	// Configuration options
 	gpu_unai.config = gpu_unai_config_ext;
-	gpu_unai.ilace_mask = GpuEffectiveIlaceMask();
+	gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
 	gpu_unai.frameskip.skipCount = gpu_unai.config.frameskip_count;
 
 	SetupLightLUT();
@@ -601,19 +601,14 @@ void  GPU_writeStatus(u32 data)
 					//  480 vertical mode, or, optionally, force it for all video modes)
 
 					if (gpu_unai.DisplayArea[3] == 480) {
-						if (gpu_unai.config.half_res)
-							gpu_unai.ilace_mask = 1; // Every other field
-						else if (gpu_unai.config.ilace_force) {
+						if (gpu_unai.config.ilace_force) {
 							gpu_unai.ilace_mask = 3; // Only need 1/4 of lines
 						} else {
 							gpu_unai.ilace_mask = 1; // Only need 1/2 of lines
 						}
 					} else {
 						// Vert resolution changed from 480 to lower one
-						if (gpu_unai.config.half_res)
-							gpu_unai.ilace_mask = 1; // 240p: skip every other line
-						else
-							gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
+						gpu_unai.ilace_mask = gpu_unai.config.ilace_force;
 					}
 				} else {
 					gpu_unai.ilace_mask = 0;

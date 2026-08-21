@@ -39,12 +39,6 @@ static inline int usleep(unsigned usec) {
 unsigned get_ticks(void);
 void wait_ticks(unsigned s);
 
-/* QPSX half-res: line-skip mask the rasterizers used, and the compacted
- * output height vout_update() produced. video_flip() presents only the
- * compacted rows; the host upscaler restores full screen size. */
-extern volatile int gpu_out_ilace_mask;
-extern volatile int gpu_out_height;
-
 /* Input */
 void pad_update(void);
 unsigned short pad_read(int num);

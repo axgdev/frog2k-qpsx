@@ -388,16 +388,4 @@ static inline bool LineSkipEnabled()
 	return true;
 }
 
-/*
- * QPSX half-res: the effective line-skip mask for the current config.
- * half_res skips every other line/field; ilace_force is the stock
- * every-other-line knob. do_cmd_list re-applies this per command list
- * (resolution-change events are not reliable on their own), so half_res
- * must be folded in here or the rasterizers never see it.
- */
-static inline int GpuEffectiveIlaceMask(void)
-{
-	return (gpu_unai.config.half_res || gpu_unai.config.ilace_force) ? 1 : 0;
-}
-
 #endif // GPU_UNAI_H
