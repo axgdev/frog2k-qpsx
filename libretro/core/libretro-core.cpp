@@ -3644,8 +3644,10 @@ void retro_init(void)
     fps_history_idx = 0;
     fps_history_count = 0;
 
+#if QPSX_PROFILER_ENABLED
     profiler_init();
     profiler_set_enabled(1);
+#endif
     fps_avg_x100 = 0;
     for (int i = 0; i < FPS_AVG_SAMPLES; i++) fps_history[i] = 0;
 
@@ -3888,21 +3890,29 @@ void retro_run(void)
 
     if (g_target_speed >= 100) {
         /* Normal speed - no throttling, just execute */
+#if QPSX_PROFILER_ENABLED
         profiler_frame_start();
+#endif
         PROFILE_START(PROF_CPU_TOTAL);
         psxCpu->Execute();
         PROFILE_END(PROF_CPU_TOTAL);
+#if QPSX_PROFILER_ENABLED
         profiler_frame_end();
+#endif
     } else {
         frame_throttle_acc += g_target_speed;
         if (frame_throttle_acc >= 100) {
             frame_throttle_acc -= 100;
             /* Emulate this frame */
+#if QPSX_PROFILER_ENABLED
             profiler_frame_start();
-            PROFILE_START(PROF_CPU_TOTAL);
+#endif
+        PROFILE_START(PROF_CPU_TOTAL);
             psxCpu->Execute();
             PROFILE_END(PROF_CPU_TOTAL);
+#if QPSX_PROFILER_ENABLED
             profiler_frame_end();
+#endif
         } else {
             /* Skip emulation - frame dupe (output previous frame buffer) */
             if (SCREEN && real_video_cb) {
@@ -3911,6 +3921,7 @@ void retro_run(void)
         }
     }
 
+#if QPSX_PROFILER_ENABLED
     /* v<prof>: dump the emulated-cycle breakdown every 60 frames */
     if ((run_frame_count % 60) == 0) {
         const ProfilerData *pd = profiler_get_data();
@@ -3934,6 +3945,7 @@ void retro_run(void)
                 pd->pct[PROF_CPU_BIOS], pd->pct[PROF_CPU_ICACHE]);
         }
     }
+#endif
 }
 
 bool retro_load_game(const struct retro_game_info *info)

@@ -104,6 +104,15 @@ extern "C" void xlog(const char *fmt, ...);
 #define QPSX_MIPS_DISPATCH_PREFETCH 0
 #endif
 
+/* Keep the NOMMU dispatch-cache base in $gp for the lifetime of the inline
+ * dispatcher. Generated guest code never allocates $gp (guest registers use
+ * $s0-$s7), and the static-PIE C helpers preserve the ABI's callee-saved $gp.
+ * This removes one stack load per translated block without consuming a guest
+ * register-cache slot. Keep the stack-pointer path as the default. */
+#ifndef QPSX_MIPS_DISPATCH_CACHE_GP
+#define QPSX_MIPS_DISPATCH_CACHE_GP 0
+#endif
+
 
 /* Fold a bounded number of short, forward unconditional jumps into the
  * current translated block.  This removes an indirect-dispatch round trip
@@ -903,6 +912,9 @@ __asm__ __volatile__ (
 ".equ  f_off_recROM,                 40        \n"
 ".equ  f_off_dispatch_cache,         44        \n"
 ".equ  f_off_temp_cache_entry,       48        \n"
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+".equ  f_off_saved_gp,               52        \n"
+#endif
 "addiu $sp, $sp, -frame_size                  \n"
 "sw    %[recRecompile], f_off_recRecompile($sp) \n"
 "sw    %[psxBranchTest], f_off_psxBranchTest($sp) \n"
@@ -910,6 +922,10 @@ __asm__ __volatile__ (
 "sw    %[recRAM], f_off_recRAM($sp)           \n"
 "sw    %[recROM], f_off_recROM($sp)           \n"
 "sw    %[dispatch_cache], f_off_dispatch_cache($sp) \n"
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"sw    $gp, f_off_saved_gp($sp)               \n"
+"lw    $gp, f_off_dispatch_cache($sp)         \n"
+#endif
 
 // Derive the local return address without an absolute text relocation.
 "bal   setup_return%=                         \n"
@@ -960,8 +976,12 @@ __asm__ __volatile__ (
 "lw    $t3, %[psxRegs_cycle_off]($fp)         \n" // $t3 = psxRegs.cycle
 "andi  $t2, $v0, %[dispatch_index_mask]       \n" // cache index
 "sll   $t2, $t2, 1                            \n" // eight bytes per entry
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"addu  $t6, $gp, $t2                          \n" // $t6 = cache entry
+#else
 "lw    $t1, f_off_dispatch_cache($sp)         \n"
 "addu  $t6, $t1, $t2                          \n" // $t6 = cache entry
+#endif
 #if QPSX_MIPS_DISPATCH_PREFETCH
 "pref  0, 0($t6)                              \n" // overlap cache fill with cycle loads
 #endif
@@ -1034,6 +1054,9 @@ __asm__ __volatile__ (
 #if QPSX_MIPS_PERSISTENT_RETURN_RA
 "lw    $ra, f_off_block_ret_addr($sp)          \n" // psxBranchTest clobbered $ra
 #endif
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"lw    $gp, f_off_dispatch_cache($sp)          \n" // Defensive reload across helper calls
+#endif
 // QPSX_039: Check emu_frame_complete flag - exit if frame is done
 "lw    $t5, f_off_frame_complete($sp)         \n"
 "lw    $t6, 0($t5)                            \n"
@@ -1055,6 +1078,9 @@ __asm__ __volatile__ (
 #if QPSX_MIPS_PERSISTENT_RETURN_RA
 "lw    $ra, f_off_block_ret_addr($sp)          \n" // recRecompile clobbered $ra
 #endif
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"lw    $gp, f_off_dispatch_cache($sp)          \n" // Defensive reload across helper calls
+#endif
 "lw    $t2, f_off_temp_var1($sp)              \n" // Restore block ptr upon return
 "lw    $t6, f_off_temp_cache_entry($sp)       \n"
 "lw    $v0, %[psxRegs_pc_off]($fp)            \n" // Blocks expect $v0 to contain PC val on entry
@@ -1065,6 +1091,9 @@ __asm__ __volatile__ (
 
 // QPSX_039: Exit point - frame complete, return to libretro
 "exit%=:                                      \n"
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"lw    $gp, f_off_saved_gp($sp)                \n"
+#endif
 "addiu $sp, $sp, frame_size                   \n"
 ".set pop                                     \n"
 
