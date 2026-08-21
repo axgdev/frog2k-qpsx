@@ -294,11 +294,19 @@ static inline bool FastLightingEnabled()
 #ifndef QPSX_GPU_FIXED_FAST_PATH
 #define QPSX_GPU_FIXED_FAST_PATH 0
 #endif
-#if QPSX_GPU_FIXED_FAST_PATH
+#ifndef QPSX_GPU_FIXED_LIGHTING
+#define QPSX_GPU_FIXED_LIGHTING QPSX_GPU_FIXED_FAST_PATH
+#endif
+#if QPSX_GPU_FIXED_LIGHTING
 	/* Linux production keeps this option permanently enabled.  Returning a
 	 * compile-time constant removes a mutable bitfield load and branch from
 	 * every lit pixel; other ports retain their runtime option semantics. */
 	return true;
+#elif QPSX_GPU_FIXED_FAST_PATH
+	/* Keep the A/B experiment compile-time exact: with the general fixed fast
+	 * path enabled but lighting explicitly disabled, select the original LUT
+	 * implementation without reintroducing a per-pixel option load. */
+	return false;
 #else
 	return gpu_unai.config.fast_lighting;
 #endif
