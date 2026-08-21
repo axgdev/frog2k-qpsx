@@ -59,6 +59,9 @@
 #ifndef QPSX_PLATFORM_LINUX
 #define QPSX_PLATFORM_LINUX 0
 #endif
+#ifndef QPSX_RUNTIME_TELEMETRY
+#define QPSX_RUNTIME_TELEMETRY 0
+#endif
 #if QPSX_PLATFORM_UNIFROG && QPSX_PLATFORM_LINUX
 #error "QPSX platform selection is ambiguous"
 #endif
@@ -76,6 +79,14 @@ extern "C" {
     extern void xlog_clear(void);
     extern uint32_t os_get_tick_count(void);  /* v267: for ETA calculation */
 }
+#endif
+
+#if QPSX_RUNTIME_TELEMETRY
+/* The recompiler updates counters only while translating a new block.  A
+ * periodic report lets an uncapped QEMU run (which may terminate without a
+ * normal retro_deinit()) expose those counters without adding a per-frame
+ * timer or a per-instruction profiler hook. */
+extern "C" void recLogTelemetry(void);
 #endif
 
 /*
@@ -3711,6 +3722,11 @@ void retro_run(void)
     if (g_debug_log_enabled && (run_frame_count % 60 == 0)) {
         XLOG("retro_run progress: frame %d", run_frame_count);
     }
+#if QPSX_RUNTIME_TELEMETRY
+    if ((run_frame_count % 600) == 0) {
+        recLogTelemetry();
+    }
+#endif
 
     /* v377: Safe mode REMOVED */
 

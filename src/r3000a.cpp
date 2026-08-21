@@ -35,12 +35,58 @@
 
 extern "C" void xlog(const char *fmt, ...);
 
+/* These defaults keep the generic QPSX tree buildable outside the SF2000
+ * frontend.  The frontend overrides them in its production flag set and the
+ * resulting values are printed once so a physical-device log identifies the
+ * exact A/B candidate that produced it. */
+#ifndef QPSX_MIPS_DISPATCH_CACHE_ENTRIES
+#define QPSX_MIPS_DISPATCH_CACHE_ENTRIES 64
+#endif
+#ifndef QPSX_GTE_NATIVE_DIVIDE
+#define QPSX_GTE_NATIVE_DIVIDE 0
+#endif
+#ifndef QPSX_GTE_HOT_O3
+#define QPSX_GTE_HOT_O3 0
+#endif
+#ifndef QPSX_MIPS_PSMEM_REG
+#define QPSX_MIPS_PSMEM_REG 0
+#endif
+#ifndef QPSX_MIPS_PERSISTENT_RETURN_RA
+#define QPSX_MIPS_PERSISTENT_RETURN_RA 0
+#endif
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS 0
+#endif
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX 0
+#endif
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES 0
+#endif
+#ifndef QPSX_PROFILER_ENABLED
+#define QPSX_PROFILER_ENABLED 0
+#endif
+#ifndef QPSX_RUNTIME_TELEMETRY
+#define QPSX_RUNTIME_TELEMETRY 0
+#endif
+
+#ifdef PSXREC
+extern "C" void recLogTelemetry(void);
+#endif
+
 PcsxConfig Config;
 R3000Acpu *psxCpu=NULL;
 psxRegisters psxRegs;
 
 int psxInit() {
 	printf("Running PCSX Version %s (%s).\n", PACKAGE_VERSION, __DATE__);
+	xlog("QPSX: build knobs dispatch_cache=%d psxM_reg=%d gte_native_div=%d "
+	     "gte_hot_o3=%d return_ra=%d fold=%d/%d/%d profiler=%d telemetry=%d",
+	     QPSX_MIPS_DISPATCH_CACHE_ENTRIES, QPSX_MIPS_PSMEM_REG,
+	     QPSX_GTE_NATIVE_DIVIDE, QPSX_GTE_HOT_O3,
+	     QPSX_MIPS_PERSISTENT_RETURN_RA, QPSX_MIPS_FOLD_DIRECT_JUMPS,
+	     QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX, QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES,
+	     QPSX_PROFILER_ENABLED, QPSX_RUNTIME_TELEMETRY);
 
 #ifdef PSXREC
 	#ifndef interpreter_none
@@ -108,6 +154,13 @@ void psxReset() {
 void psxShutdown() {
 	// Shutdown CPU *before* calling psxMemShutdown(), to allow it to unmap
 	//  psxM,psxH etc, if it has done so.
+#ifdef PSXREC
+	/* This is intentionally once per emulator lifetime: counters are updated
+	 * only when a block is compiled, so this log has no steady-state cost. */
+	#if QPSX_RUNTIME_TELEMETRY
+	recLogTelemetry();
+	#endif
+#endif
 	psxCpu->Shutdown();
 
 	psxMemShutdown();

@@ -339,6 +339,16 @@ static bool host_v0_reg_is_const;          /* PCs are cached in $v0. See rec_bcu
 static u32  host_v0_reg_constval;
 static bool host_ra_reg_has_block_retaddr; /* Indirect-return address is cached in $ra. */
 
+#if QPSX_RUNTIME_TELEMETRY
+/* Compile-time counters only.  Keeping these off the ExecuteBlock path makes
+ * the production diagnostic observable without turning the old profiler back
+ * on (the profiler adds a measurable cost to every translated instruction). */
+static unsigned rec_telemetry_blocks;
+static unsigned rec_telemetry_bytes;
+static unsigned rec_telemetry_folds;
+static unsigned rec_telemetry_resets;
+#endif
+
 
 #ifdef WITH_DISASM
 char	disasm_buffer[512];
@@ -650,6 +660,14 @@ static void recRecompile()
 
 	DISASM_HOST();
 	clear_insn_cache(recMemStart, recMem, 0);
+
+#if QPSX_RUNTIME_TELEMETRY
+	rec_telemetry_blocks++;
+	rec_telemetry_bytes += (unsigned)((u8 *)recMem - (u8 *)recMemStart);
+#if QPSX_MIPS_FOLD_DIRECT_JUMPS
+	rec_telemetry_folds += direct_jump_fold_count;
+#endif
+#endif
 }
 
 
@@ -658,6 +676,13 @@ static int recInit()
 	REC_LOG("Initializing\n");
 
 	recMem = (u32*)recMemBase;
+
+#if QPSX_RUNTIME_TELEMETRY
+	rec_telemetry_blocks = 0;
+	rec_telemetry_bytes = 0;
+	rec_telemetry_folds = 0;
+	rec_telemetry_resets = 0;
+#endif
 
 	// Init code buffer, to allocate the RAM we need in advance. Filling with
 	//  all-1's should force an exception on any accidental non-code execution.
@@ -2169,6 +2194,9 @@ void recNotify(int note, void *data __attribute__((unused)))
 
 static void recReset()
 {
+#if QPSX_RUNTIME_TELEMETRY
+	rec_telemetry_resets++;
+#endif
 	memset(code_pages, 0, sizeof(code_pages));
 	rec_dispatch_cache_clear();
 	memset(recRAM, 0, REC_RAM_SIZE);
@@ -2181,6 +2209,17 @@ static void recReset()
 	// Set default recompilation options and any per-game options
 	rec_set_options();
 }
+
+#if QPSX_RUNTIME_TELEMETRY
+extern "C" void recLogTelemetry(void)
+{
+	const unsigned cache_used = (unsigned)((u8 *)recMem - recMemBase);
+	xlog("QPSX: rec telemetry blocks=%u code_bytes=%u folds=%u "
+	     "cache_used=%u cache_resets=%u",
+	     rec_telemetry_blocks, rec_telemetry_bytes, rec_telemetry_folds,
+	     cache_used, rec_telemetry_resets);
+}
+#endif
 
 
 R3000Acpu psxRec =
