@@ -49,6 +49,12 @@ void gpuSetTexture(u16 tpage)
 INLINE void gpuSetCLUT(u16 clut)
 {
 	gpu_unai.CBA = &((u16*)gpu_unai.vram)[(clut & 0x7FFF) << 4];
+#if QPSX_GPU_4BPP_PALETTE_LUT
+	/* A CLUT can be rewritten in VRAM between primitives.  Invalidate on every
+	 * GP0 CLUT selection rather than keying only on the pointer, preserving the
+	 * original GPU semantics while keeping all work out of short spans. */
+	gpu_unai.CBA4PackedValid = false;
+#endif
 }
 
 #ifdef  ENABLE_GPU_NULL_SUPPORT

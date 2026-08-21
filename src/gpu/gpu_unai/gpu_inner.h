@@ -58,6 +58,30 @@
 #ifndef QPSX_GPU_4BPP_FLATV_MIN_PIXELS
 #define QPSX_GPU_4BPP_FLATV_MIN_PIXELS 16
 #endif
+#ifndef QPSX_GPU_4BPP_PALETTE_LUT
+#define QPSX_GPU_4BPP_PALETTE_LUT 0
+#endif
+#if QPSX_GPU_4BPP_PALETTE_LUT
+#if defined(__GNUC__)
+#define QPSX_GPU_PALETTE_LUT_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_PALETTE_LUT_NOINLINE
+#endif
+static QPSX_GPU_PALETTE_LUT_NOINLINE void
+qpsx_gpu_prepare_4bpp_palette_lut(const gpu_unai_t &gpu_unai)
+{
+	if (gpu_unai.CBA4PackedValid)
+		return;
+	const u16 *cba = gpu_unai.CBA;
+	for (u32 packed = 0; packed < 256; ++packed) {
+		gpu_unai.CBA4Packed[packed] =
+			(u32)cba[packed & 0xfu] |
+			((u32)cba[packed >> 4] << 16);
+	}
+	gpu_unai.CBA4PackedValid = true;
+}
+#undef QPSX_GPU_PALETTE_LUT_NOINLINE
+#endif
 #if QPSX_GPU_RUNTIME_METRICS
 extern u32 qpsx_gpu_poly_span_hist[2048];
 extern u32 qpsx_gpu_poly_pixel_hist[2048];
@@ -127,10 +151,19 @@ qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 	const u16 *cba = gpu_unai.CBA;
 	u32 tex_u = l_u;
 	if (unit_u) {
+	#if QPSX_GPU_4BPP_PALETTE_LUT
+		qpsx_gpu_prepare_4bpp_palette_lut(gpu_unai);
+		const u32 *cba4 = gpu_unai.CBA4Packed;
+	#endif
 		u32 tu = l_u >> FIXED_BITS;
 		u8 *packed_row = (u8 *)row + (tu >> 1);
 		if (tu & 1u) {
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u32 pair = cba4[*packed_row];
+			const u16 src = (u16)(pair >> 16);
+		#else
 			const u16 src = cba[*packed_row >> 4];
+		#endif
 			if (src)
 				*pDst = src;
 			++pDst;
@@ -139,8 +172,14 @@ qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 		}
 		while (count >= 2) {
 			const u8 packed = *packed_row++;
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u32 pair = cba4[packed];
+			const u16 src0 = (u16)pair;
+			const u16 src1 = (u16)(pair >> 16);
+		#else
 			const u16 src0 = cba[packed & 0xf];
 			const u16 src1 = cba[packed >> 4];
+		#endif
 			if (src0)
 				pDst[0] = src0;
 			if (src1)
@@ -149,7 +188,11 @@ qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 			count -= 2;
 		}
 		if (count) {
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u16 src = (u16)cba4[*packed_row & 0xfu];
+		#else
 			const u16 src = cba[*packed_row & 0xf];
+		#endif
 			if (src)
 				*pDst = src;
 		}
@@ -620,10 +663,18 @@ static void gpuSpriteSpanFn(u16 *pDst, u32 count, u8* pTxt, u32 u0)
 	 * texture-window corner cases retain the generic renderer's behavior. */
 	if (CF == 0x20 && u0_mask == 255u && u0 <= 255u &&
 		count <= 256u - u0) {
+	#if QPSX_GPU_4BPP_PALETTE_LUT
+		qpsx_gpu_prepare_4bpp_palette_lut(gpu_unai);
+		const u32 *CBA4_ = gpu_unai.CBA4Packed;
+	#endif
 		u32 tu = u0;
 		if (tu & 1u) {
 			const u8 packed = pTxt[tu >> 1];
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u16 src = (u16)(CBA4_[packed] >> 16);
+		#else
 			const u16 src = CBA_[packed >> 4];
+		#endif
 			if (src) *pDst = src;
 			++pDst;
 			++tu;
@@ -631,8 +682,14 @@ static void gpuSpriteSpanFn(u16 *pDst, u32 count, u8* pTxt, u32 u0)
 		}
 		while (count >= 2) {
 			const u8 packed = pTxt[tu >> 1];
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u32 pair = CBA4_[packed];
+			const u16 src0 = (u16)pair;
+			const u16 src1 = (u16)(pair >> 16);
+		#else
 			const u16 src0 = CBA_[packed & 0x0f];
 			const u16 src1 = CBA_[packed >> 4];
+		#endif
 			if (src0) pDst[0] = src0;
 			if (src1) pDst[1] = src1;
 			pDst += 2;
@@ -641,7 +698,11 @@ static void gpuSpriteSpanFn(u16 *pDst, u32 count, u8* pTxt, u32 u0)
 		}
 		if (count) {
 			const u8 packed = pTxt[tu >> 1];
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u16 src = (u16)CBA4_[packed];
+		#else
 			const u16 src = CBA_[packed & 0x0f];
+		#endif
 			if (src) *pDst = src;
 		}
 		return;

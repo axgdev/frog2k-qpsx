@@ -56,6 +56,14 @@
                                          //  defined, use old inaccurate division
 #endif
 
+/* Optional SF2000 4bpp packed-palette cache.  The cache is deliberately
+ * compile-time gated: the normal core keeps the gpu_unai state and its small
+ * data-cache footprint unchanged.  The experimental path materializes the
+ * two 16-bit CLUT results for each possible source byte in a 1 KiB table. */
+#ifndef QPSX_GPU_4BPP_PALETTE_LUT
+#define QPSX_GPU_4BPP_PALETTE_LUT 0
+#endif
+
 /*
  * QPSX_081: GPU Optimization - Fast Lighting
  *
@@ -219,6 +227,13 @@ struct gpu_unai_t {
 
 	u16* TBA;              // Ptr to current texture in VRAM
 	u16* CBA;              // Ptr to current CLUT in VRAM
+#if QPSX_GPU_4BPP_PALETTE_LUT
+	/* Mutable because the span helper receives a const GPU state reference;
+	 * the table is populated lazily by the first eligible span after each
+	 * GP0 texture/CLUT selection. */
+	mutable u32 CBA4Packed[256];
+	mutable bool CBA4PackedValid;
+#endif
 
 	////////////////////////////////////////////////////////////////////////////
 	//  Inner Loop parameters
