@@ -52,6 +52,9 @@
 #ifndef QPSX_GPU_PACKED_SPRITE_4BPP
 #define QPSX_GPU_PACKED_SPRITE_4BPP 0
 #endif
+#ifndef QPSX_GPU_PACKED_POLY_WRITES
+#define QPSX_GPU_PACKED_POLY_WRITES 0
+#endif
 #ifndef QPSX_GPU_4BPP_FLATV
 #define QPSX_GPU_4BPP_FLATV 0
 #endif
@@ -293,6 +296,39 @@ static inline bool qpsx_gpu_poly_span_4bpp_linear(const gpu_unai_t &gpu_unai,
 	}
 	return true;
 }
+#endif
+
+#if QPSX_GPU_PACKED_POLY_WRITES
+#if defined(__GNUC__)
+#define QPSX_GPU_POLY_PACK_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_POLY_PACK_NOINLINE
+#endif
+static QPSX_GPU_POLY_PACK_NOINLINE void
+qpsx_gpu_fill_flat_poly(u16 *pDst, u32 count, u16 data)
+{
+	if (count && ((uintptr_t)pDst & 2u)) {
+		*pDst++ = data;
+		--count;
+	}
+	const u32 packed = (u32)data | ((u32)data << 16);
+	u32 *pDst32 = (u32 *)pDst;
+	while (count >= 8) {
+		pDst32[0] = packed;
+		pDst32[1] = packed;
+		pDst32[2] = packed;
+		pDst32[3] = packed;
+		pDst32 += 4;
+		count -= 8;
+	}
+	while (count >= 2) {
+		*pDst32++ = packed;
+		count -= 2;
+	}
+	if (count)
+		*(u16 *)pDst32 = data;
+}
+#undef QPSX_GPU_POLY_PACK_NOINLINE
 #endif
 
 // If defined, Gouraud colors are fixed-point 5.11, otherwise they are 8.16
@@ -871,6 +907,21 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 	const bool skip_uSrc_mask = (!CF_TEXTMODE) || CF_LIGHT;
 
 	u32 bMsk; if (CF_BLITMASK) bMsk = gpu_unai.blit_mask;
+
+#if QPSX_GPU_PACKED_POLY_WRITES
+	/* The opaque, untextured, non-Gouraud polygon is a pure fill.  It is
+	 * common in the Ridge Racer scene (flat road/sky polygons), yet the
+	 * generic loop performs one 16-bit store per pixel.  Pairing identical
+	 * RGB555 pixels into aligned 32-bit stores halves store traffic and avoids
+	 * the load/branch machinery used by every other polygon variant.  Keep the
+	 * helper out of every template body: on a 16 KiB I-cache the cold alignment
+	 * and tail code is more expensive than the saving for short spans. */
+	if (!CF_TEXTMODE && !CF_GOURAUD && !CF_BLEND && !CF_MASKCHECK &&
+	    !CF_MASKSET && !CF_BLITMASK && count >= 8) {
+		qpsx_gpu_fill_flat_poly(pDst, count, gpu_unai.PixelData);
+		return;
+	}
+#endif
 
 	if (!CF_TEXTMODE)
 	{

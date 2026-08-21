@@ -95,6 +95,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_PACKED_SPRITE_4BPP
 #define QPSX_GPU_PACKED_SPRITE_4BPP 0
 #endif
+#ifndef QPSX_GPU_PACKED_POLY_WRITES
+#define QPSX_GPU_PACKED_POLY_WRITES 0
+#endif
 #ifndef QPSX_GPU_4BPP_FLATV
 #define QPSX_GPU_4BPP_FLATV 0
 #endif
@@ -148,13 +151,14 @@ int psxInit() {
 	     QPSX_MIPS_PERSISTENT_RETURN_RA);
 	xlog("QPSX: fold=%d/%d/%d profiler=%d telemetry=%d gpu_fixed=%d "
 	     "gpu_light_fast=%d gpu_linear4=%d gpu_tile32=%d gpu_sprite4=%d "
-	     "gpu_hot_order=%d gpu_metrics=%d mirror=%d fast_mem=%d",
+	     "gpu_poly32=%d gpu_hot_order=%d gpu_metrics=%d mirror=%d fast_mem=%d",
 	     QPSX_MIPS_FOLD_DIRECT_JUMPS,
 	     QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX, QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES,
 	     QPSX_PROFILER_ENABLED, QPSX_RUNTIME_TELEMETRY,
 	     QPSX_GPU_FIXED_FAST_PATH, QPSX_GPU_FIXED_LIGHTING,
 	     QPSX_GPU_LINEAR_4BPP,
 	     QPSX_GPU_PACKED_TILE_WRITES, QPSX_GPU_PACKED_SPRITE_4BPP,
+	     QPSX_GPU_PACKED_POLY_WRITES,
 	     QPSX_GPU_HOT_DRIVER_ORDER,
 	     QPSX_GPU_RUNTIME_METRICS, QPSX_MIPS_VIRTUAL_MIRRORING,
 	     QPSX_MIPS_FAST_MEM_CONVERT);
