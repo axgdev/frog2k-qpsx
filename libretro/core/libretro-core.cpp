@@ -73,11 +73,42 @@
 #error "QPSX platform selection is ambiguous"
 #endif
 
+/* The SD root defaults to the established per-platform mount, but is a
+ * build-time default only: the runtime resolver below prefers the SD root
+ * the frontend reports through the standard libretro directory hints
+ * (GET_SYSTEM_DIRECTORY / GET_CONTENT_DIRECTORY), so cores built for one
+ * firmware keep working when the host mounts the card elsewhere.  Override
+ * with -DQPSX_SD_ROOT= to force a specific root at build time. */
+#ifndef QPSX_SD_ROOT
 #if QPSX_PLATFORM_LINUX
 #define QPSX_SD_ROOT "/mnt/sd"
 #else
 #define QPSX_SD_ROOT "/mnt/sda1"
 #endif
+#endif
+
+/* Runtime-resolved SD mount root.  Filled by qpsx_resolve_sd_root() during
+ * retro_init() once the frontend has supplied its directory hints, so path
+ * consumers never have to hardcode a mount point. */
+static char qpsx_sd_root[256];
+static int qpsx_sd_root_resolved = 0;
+
+static const char *qpsx_sd_root_ref(void)
+{
+    return qpsx_sd_root_resolved ? qpsx_sd_root : QPSX_SD_ROOT;
+}
+
+/* Config/log files live below the discovered SD root.  Build a path from the
+ * runtime-resolved root instead of a hardcoded mount point.  A single scratch
+ * buffer is sufficient because each caller consumes the path immediately
+ * (fopen/open/stat) and never retains the pointer. */
+static char qpsx_cfg_buf[512];
+static const char *qpsx_cfg_path(const char *leaf)
+{
+    snprintf(qpsx_cfg_buf, sizeof(qpsx_cfg_buf), "%s/%s",
+        qpsx_sd_root_ref(), leaf);
+    return qpsx_cfg_buf;
+}
 
 /* SF2000 xlog and timer */
 #ifdef SF2000
@@ -95,8 +126,6 @@ extern "C" {
  * When enabled via menu, writes to the platform SD log path.
  */
 static FILE *debug_log_file = NULL;
-static const char *DEBUG_LOG_PATH = QPSX_SD_ROOT "/log.txt";
-
 /* Global flag for debug logging (set from qpsx_config.debug_log) */
 static int g_debug_log_enabled = 0;
 
@@ -106,7 +135,7 @@ static void debug_log_write(const char *prefix, const char *fmt, ...)
 
     /* Open log file if not already open */
     if (!debug_log_file) {
-        debug_log_file = fopen(DEBUG_LOG_PATH, "a");
+        debug_log_file = fopen(qpsx_cfg_path("log.txt"), "a");
         if (!debug_log_file) return;  /* Can't open, silently fail */
     }
 
@@ -163,7 +192,7 @@ extern "C" void port_debug_log(const char *fmt, ...)
     if (!g_debug_log_enabled) return;
 
     if (!debug_log_file) {
-        debug_log_file = fopen(DEBUG_LOG_PATH, "a");
+        debug_log_file = fopen(qpsx_cfg_path("log.txt"), "a");
         if (!debug_log_file) return;
     }
 
@@ -391,6 +420,38 @@ static void remap_rebuild_lut(void);
 static const char *retro_system_directory;
 static const char *retro_save_directory;
 static const char *retro_content_directory;
+
+/* Resolve the SD mount root from the libretro directory hints the frontend
+ * supplied during retro_init(), so no code path has to hardcode a mount point
+ * (/mnt/sda1 on UniFrog, /mnt/sd on the Linux frontend).  UniFrog reports
+ * the card root as both the content and (BIOS) system directory's parent;
+ * the Linux frontend reports <root>/bios and <root>/saves separately. */
+static void qpsx_resolve_sd_root(void)
+{
+    const char *candidate = NULL;
+    size_t n;
+
+    if (retro_content_directory && retro_content_directory[0] &&
+        strcmp(retro_content_directory, "."))
+        candidate = retro_content_directory;
+
+    /* UniFrog sets GET_SYSTEM_DIRECTORY to <mount>/bios; the Linux frontend
+     * also reports the BIOS dir.  Strip a trailing "/bios" to reach the mount. */
+    if (!candidate && retro_system_directory &&
+        retro_system_directory[0] && strcmp(retro_system_directory, "."))
+        candidate = retro_system_directory;
+
+    if (candidate)
+        snprintf(qpsx_sd_root, sizeof(qpsx_sd_root), "%s", candidate);
+    else
+        snprintf(qpsx_sd_root, sizeof(qpsx_sd_root), "%s", QPSX_SD_ROOT);
+
+    n = strlen(qpsx_sd_root);
+    if (n >= 5 && !strcmp(qpsx_sd_root + n - 5, "/bios"))
+        qpsx_sd_root[n - 5] = '\0';
+
+    qpsx_sd_root_resolved = 1;
+}
 
 static char game_path[512];
 static bool psx_initted = false;
@@ -725,11 +786,14 @@ extern "C" void retro_audio_cb(int16_t *buf, int samples)
 }
 
 #define QPSX_VERSION "398"
-#define QPSX_GLOBAL_CONFIG_PATH QPSX_SD_ROOT "/cores/config/pcsx4all.cfg"
-#define QPSX_NATIVE_CONFIG_PATH QPSX_SD_ROOT "/cores/config/psx_native.cfg"
-#define QPSX_ASM_CONFIG_PATH QPSX_SD_ROOT "/cores/config/psx_asm.cfg"
-#define QPSX_CRASH_MARKER_PATH QPSX_SD_ROOT "/cores/config/psx_crash.tmp"
-#define QPSX_STARTUP_CONFIG_PATH QPSX_SD_ROOT "/cores/config/psx_startup.cfg"
+
+/* Config/log files live below the discovered SD root; qpsx_cfg_path() (defined
+ * near the top) builds them from the runtime-resolved root. */
+#define QPSX_GLOBAL_CONFIG_PATH  qpsx_cfg_path("cores/config/pcsx4all.cfg")
+#define QPSX_NATIVE_CONFIG_PATH  qpsx_cfg_path("cores/config/psx_native.cfg")
+#define QPSX_ASM_CONFIG_PATH     qpsx_cfg_path("cores/config/psx_asm.cfg")
+#define QPSX_CRASH_MARKER_PATH   qpsx_cfg_path("cores/config/psx_crash.tmp")
+#define QPSX_STARTUP_CONFIG_PATH qpsx_cfg_path("cores/config/psx_startup.cfg")
 
 /* v395: Global startup option - whether to open menu at startup */
 static int g_menu_at_start = QPSX_PLATFORM_UNIFROG ? 0 : 1;
@@ -1634,7 +1698,7 @@ static void fb_init_game_dir(void) {
         *last_slash = '\0';
     } else {
         /* Fallback if no slash found */
-        strcpy(fb_game_dir, QPSX_SD_ROOT "/ROMS");
+        snprintf(fb_game_dir, sizeof(fb_game_dir), "%s/ROMS", qpsx_sd_root_ref());
     }
     XLOG("CD swap dir: %s", fb_game_dir);
 }
@@ -2123,14 +2187,14 @@ static void get_game_config_path(char *path, int maxlen)
     const char *base = strrchr(game_path, '/');
     if (!base) base = strrchr(game_path, '\\');
     if (base) base++; else base = game_path;
-    snprintf(path, maxlen, QPSX_SD_ROOT "/cores/config/%s.cfg", base);
+    snprintf(path, maxlen, "%s/cores/config/%s.cfg", qpsx_sd_root_ref(), base);
 }
 
 static void get_slus_config_path(char *path, int maxlen)
 {
     /* Secondary: SLUS/SCES/SLES-based config */
     if (CdromId[0] != '\0') {
-        snprintf(path, maxlen, QPSX_SD_ROOT "/cores/config/%s.cfg", CdromId);
+        snprintf(path, maxlen, "%s/cores/config/%s.cfg", qpsx_sd_root_ref(), CdromId);
     } else {
         path[0] = '\0';
     }
@@ -2334,7 +2398,7 @@ static int find_matching_slus_config(char *result_path, int maxlen)
 
     XLOG("v340: Scanning for SLUS config matching CdromId=%s, game=%s", CdromId, game_name);
 
-    int dir = fs_opendir(QPSX_SD_ROOT "/cores/config");
+    int dir = fs_opendir(qpsx_cfg_path("cores/config"));
     if (dir < 0) {
         XLOG("v340: Cannot open config directory");
         return 0;
@@ -2358,7 +2422,7 @@ static int find_matching_slus_config(char *result_path, int maxlen)
 
         /* Build full path and read config */
         char cfg_path[300];
-        snprintf(cfg_path, sizeof(cfg_path), QPSX_SD_ROOT "/cores/config/%s", entry.d_name);
+        snprintf(cfg_path, sizeof(cfg_path), "%s/cores/config/%s", qpsx_sd_root_ref(), entry.d_name);
 
         FILE *f = fopen(cfg_path, "r");
         if (!f) continue;
@@ -3776,6 +3840,10 @@ void retro_init(void)
     else
         retro_content_directory = ".";
 
+    /* v398: Derive the SD mount root from the frontend's directory hints so
+     * we never assume a hardcoded mount point (/mnt/sda1 vs /mnt/sd). */
+    qpsx_resolve_sd_root();
+
     enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_RGB565;
     environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
 
@@ -4150,99 +4218,91 @@ bool retro_load_game(const struct retro_game_info *info)
     Config.FrameLimit = 0;
     Config.Cpu = 0;
 
-    snprintf(Config.BiosDir, sizeof(Config.BiosDir), QPSX_SD_ROOT "/bios");
+    /* v398: BIOS dir follows the runtime-resolved SD root (no hardcoded
+     * mount point). */
+    snprintf(Config.BiosDir, sizeof(Config.BiosDir), "%s/bios",
+        qpsx_sd_root_ref());
     snprintf(Config.Bios, sizeof(Config.Bios), "%s", qpsx_config.bios_file);
     XLOG("BIOS: %s/%s", Config.BiosDir, Config.Bios);
 
-    /* Per-game memory cards use the established UniFrog path or the Linux
-     * frontend save directory, depending on the selected platform.
+    /* Per-game memory cards
      *
-     * Algorithm:
-     * 1. Extract game name from the loaded path
-     * 2. Build per-game path: <save directory>/PSX/<game>.mcd
-     * 3. Create PSX directory if it doesn't exist
-     * 4. If per-game .mcd exists -> use it
-     * 5. If not -> path is set, but file will be created on first save (on-demand in sio.cpp)
-     *
-     * UniFrog historically stores cards below /mnt/sda1/ROMS/SAVE/PSX.
-     * Linux builds use /mnt/sd/saves/PSX and retain the older Linux path as a
-     * compatibility fallback.
+     * The save location is resolved at runtime and must not hardcode a mount
+     * point.  We build a small set of candidate directories and use the first
+     * one that already contains the card, so saves made by previous UniFrog
+     * and Linux builds under either historical path layout keep working and
+     * are not orphaned:
+     *   1. The frontend's RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY hint plus
+     *      "/PSX" (UniFrog reports <sd_root>, Linux reports <sd_root>/saves).
+     *   2. <sd_root>/ROMS/SAVE/PSX (the historical Linux layout).
+     *   3. <sd_root>/unifrog/saves/PSX (the layout UniFrog's module support
+     *      layer maps the legacy /mnt/sda1/ROMS/SAVE/PSX path onto).
+     * If none exists yet the path is set here and the file is created on the
+     * game's first save (on-demand, in sio.cpp).
      */
     {
-#if QPSX_PLATFORM_UNIFROG
-        static const char *psx_save_dir = QPSX_SD_ROOT "/ROMS/SAVE/PSX";
-        char parent_save_dir[sizeof(Config.Mcd1)];
-        char game_name_buf[256];
-
-        get_game_name(game_name_buf, sizeof(game_name_buf));
-        if (snprintf(parent_save_dir, sizeof(parent_save_dir), "%s/ROMS/SAVE",
-                QPSX_SD_ROOT) >= (int)sizeof(parent_save_dir) ||
-            snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/%s.mcd",
-                psx_save_dir, game_name_buf) >= (int)sizeof(Config.Mcd1) ||
-            snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/shared_mcd2.mcd",
-                psx_save_dir) >= (int)sizeof(Config.Mcd2)) {
-            XLOG("Memory-card path is too long for %s", game_name_buf);
-            Config.Mcd1[0] = '\0';
-            Config.Mcd2[0] = '\0';
-            return false;
-        }
-
-        fs_mkdir(parent_save_dir, 0755);
-        fs_mkdir(psx_save_dir, 0755);
-        if (file_exists(Config.Mcd1))
-            XLOG("Per-game memcard: %s", Config.Mcd1);
-        else
-            XLOG("Per-game memcard will be created on first save: %s", Config.Mcd1);
-#else
-        static const char *legacy_save_dir = QPSX_SD_ROOT "/ROMS/SAVE/PSX";
-        const char *save_root = retro_save_directory;
+        static const char *legacy_rel[] = {
+            "saves/PSX",
+            "ROMS/SAVE/PSX",
+            "unifrog/saves/PSX",
+        };
+        const char *sd_root = qpsx_sd_root_ref();
+        const char *hint = retro_save_directory;
         char psx_save_dir[sizeof(Config.Mcd1)];
-        char legacy_mcd1[sizeof(Config.Mcd1)];
-        char legacy_mcd2[sizeof(Config.Mcd2)];
+        char cand_mcd1[sizeof(Config.Mcd1)];
+        char cand_mcd2[sizeof(Config.Mcd2)];
         char game_name_buf[256];
+        unsigned i;
 
-        /* Get game name from loaded game path */
         get_game_name(game_name_buf, sizeof(game_name_buf));
-        if (!save_root || !save_root[0] || !strcmp(save_root, ".") ||
-            !strcmp(save_root, QPSX_SD_ROOT))
-            save_root = QPSX_SD_ROOT "/saves";
-        if (snprintf(psx_save_dir, sizeof(psx_save_dir), "%s/PSX", save_root) >=
-                (int)sizeof(psx_save_dir) ||
-            snprintf(legacy_mcd1, sizeof(legacy_mcd1), "%s/%s.mcd",
-                legacy_save_dir, game_name_buf) >= (int)sizeof(legacy_mcd1) ||
-            snprintf(legacy_mcd2, sizeof(legacy_mcd2), "%s/shared_mcd2.mcd",
-                legacy_save_dir) >= (int)sizeof(legacy_mcd2)) {
-            XLOG("Memory-card path is too long for %s", game_name_buf);
-            Config.Mcd1[0] = '\0';
-            Config.Mcd2[0] = '\0';
-            return false;
-        }
 
-        /* Create save directories if they don't exist */
-        fs_mkdir(save_root, 0755);
+        /* Primary save dir: frontend hint + "/PSX" when the hint looks like a
+         * real directory; otherwise fall through to <sd_root>/saves/PSX. */
+        if (hint && hint[0] && strcmp(hint, ".") &&
+            !strstr(hint, "/ROMS/SAVE") &&
+            !strstr(hint, "/unifrog/saves") &&
+            snprintf(psx_save_dir, sizeof(psx_save_dir), "%s/PSX", hint) <
+                (int)sizeof(psx_save_dir)) {
+            i = 0;
+        } else {
+            snprintf(psx_save_dir, sizeof(psx_save_dir), "%s/saves/PSX",
+                sd_root);
+            i = 1;
+        }
         fs_mkdir(psx_save_dir, 0755);
 
-        /* Build per-game memory card path */
-        snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/%s.mcd",
-            psx_save_dir, game_name_buf);
-        snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/shared_mcd2.mcd",
-            psx_save_dir);
+        /* Search primary then the historical legacy layouts. */
+        for (; i < sizeof(legacy_rel) / sizeof(legacy_rel[0]); i++) {
+            char dir[sizeof(Config.Mcd1)];
+            if (i > 0 &&
+                snprintf(dir, sizeof(dir), "%s/%s", sd_root, legacy_rel[i]) >=
+                    (int)sizeof(dir))
+                continue;
+            if (i == 0)
+                snprintf(dir, sizeof(dir), "%s", psx_save_dir);
 
-        if (file_exists(Config.Mcd1)) {
-            XLOG("Per-game memcard: %s", Config.Mcd1);
-        } else if (file_exists(legacy_mcd1)) {
-            snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s", legacy_mcd1);
-            XLOG("Using legacy per-game memcard: %s", Config.Mcd1);
-        } else {
-            XLOG("Per-game memcard will be created on first save: %s", Config.Mcd1);
+            snprintf(cand_mcd1, sizeof(cand_mcd1), "%s/%s.mcd",
+                dir, game_name_buf);
+            snprintf(cand_mcd2, sizeof(cand_mcd2), "%s/shared_mcd2.mcd",
+                dir);
+
+            if (file_exists(cand_mcd1) || file_exists(cand_mcd2) || i == 0) {
+                snprintf(Config.Mcd1, sizeof(Config.Mcd1), "%s/%s.mcd",
+                    dir, game_name_buf);
+                snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s/shared_mcd2.mcd",
+                    dir);
+                if (!file_exists(cand_mcd1) && i != 0)
+                    fs_mkdir(dir, 0755);  /* keep legacy dir for future cards */
+                if (file_exists(Config.Mcd1))
+                    XLOG("Per-game memcard (dir %u): %s", i, Config.Mcd1);
+                else
+                    XLOG("Per-game memcard will be created on first save: %s",
+                        Config.Mcd1);
+                if (file_exists(Config.Mcd2))
+                    XLOG("Shared memcard (dir %u): %s", i, Config.Mcd2);
+                break;
+            }
         }
-        if (file_exists(Config.Mcd2)) {
-            XLOG("Shared memcard: %s", Config.Mcd2);
-        } else if (file_exists(legacy_mcd2)) {
-            snprintf(Config.Mcd2, sizeof(Config.Mcd2), "%s", legacy_mcd2);
-            XLOG("Using legacy shared memcard: %s", Config.Mcd2);
-        }
-#endif
     }
 
     LOAD_STAGE("QPSX_PSX_INIT", 8, 16, "psxInit");

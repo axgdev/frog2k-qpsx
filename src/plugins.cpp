@@ -25,6 +25,7 @@
 #include "plugins.h"
 #include "psxevents.h"
 #include "plugin_lib.h"
+#include "sio.h"   /* v398: boundary memcard sync */
 
 #ifdef SPU_PCSXREARMED
 #include "spu/spu_pcsxrearmed/spu_config.h"
@@ -47,6 +48,16 @@ int LoadPlugins(void) {
 	PLUG_LOG("LoadPlugins() start");
 	ReleasePlugins();
 	PLUG_LOG("ReleasePlugins done");
+
+	/* v398: Close/sync any memory-card file a previous game session on a
+	 * reused core left open.  Auto-saving games create their per-game .mcd on
+	 * first save (sio SaveMcd opens it "r+b" and keeps it open until a
+	 * debounced PSXINT_SIO_SYNC_MCD event or the reload path).  If that
+	 * close never ran before the next open, the reload's LoadMcd re-opens the
+	 * same path and can wedge on the SF2000 storage layer, freezing the
+	 * frontend progress bar at the QPSX_PLUGINS (62%) load stage.  Sync here
+	 * so a reuse of the core always starts from a clean handle. */
+	sioSyncMcds();
 
 	PLUG_LOG("Loading Mcd1...");
 	LoadMcd(MCD1, Config.Mcd1); //Memcard 1

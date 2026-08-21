@@ -817,12 +817,20 @@ int LoadMcd(enum MemcardNum mcd_num, char* filename)
 
 	data = memcards[mcd_num].data;
 	if ((bytes_read = fread(data, 1, MCD_SIZE, f)) != MCD_SIZE) {
-		printf("Error reading data from memory card %s!\n", mc.filename);
-		printf("Wanted %zu bytes and got %zu\n", (size_t)MCD_SIZE, bytes_read);
-		goto error;
+		/* v398: Do not treat a short/truncated card as fatal.  An in-game
+		 * auto-save that was interrupted can leave a partially-written .mcd;
+		 * erroring out here used to wedge the reload of an auto-saving game
+		 * (the frontend freezes at the QPSX_PLUGINS/62% stage) or strand a
+		 * stale handle.  Pad the untread tail with 0xff (the "empty" byte) and
+		 * keep whatever was read so the game still loads a mostly-blank card. */
+		if (bytes_read < (size_t)MCD_SIZE)
+			memset(data + bytes_read, 0xff, (size_t)MCD_SIZE - bytes_read);
+		printf("Warning: short-read on memory card %s (wanted %zu, got %zu bytes; tail padded)\n",
+			mc.filename, (size_t)MCD_SIZE, bytes_read);
 	}
 
 	fclose(f);
+	f = NULL;
 
 	// Convert file to native raw memcard format, if not already
 	if (convert_data) {
