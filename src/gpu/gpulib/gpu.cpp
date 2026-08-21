@@ -810,7 +810,7 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
 /* Keep this cold relative to the parser and chain traversal.  The guarded
  * path calls it only once at the end of a safe chain, or once when it must
  * fall back to legacy per-node publication. */
-QPSX_HOT_GPU static noinline void
+QPSX_HOT_GPU static noinline __attribute__((section(".text.zzz_qpsx_dma_finish"))) void
 qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3)
 {
   gpu.status.reg &= ~0x1fff;
