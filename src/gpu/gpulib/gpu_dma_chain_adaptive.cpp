@@ -7,6 +7,10 @@
 #include "profiler.h"
 #include "qpsx_phase_metrics.h"
 
+#ifndef QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH 0
+#endif
+
 /* These operations are unreachable on the common deferred path, but are
  * needed to preserve exact A0/C0 and continued-write behaviour before the
  * walker falls back to the historical parser. */
@@ -92,7 +96,8 @@ long qpsx_gpu_adaptive_dma_chain(uint32_t *rambase, uint32_t start_addr)
   unsigned dma_fallback = 0;
 #endif
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH
+  /* GPU_dmaChain's caller already issued this hint on the opt-in path. */
   __builtin_prefetch(rambase + (start_addr & 0x1fffff) / 4);
 #endif
   for (count = 0, addr = start_addr & 0xffffff;
