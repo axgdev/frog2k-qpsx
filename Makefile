@@ -120,6 +120,22 @@ qpsx-asm-classifier-cross-audit:
 			if printf '%s\n' "$$block" | grep -Eq '[[:space:]]31091f80[[:space:]]'; then \
 				echo "$$fn: classifier still uses the old broad mask (fastpath=$$fastpath)" >&2; exit 1; \
 			fi; \
+			case "$$fn" in psxMemRead*) lut=psxMemRLUT ;; *) lut=psxMemWLUT ;; esac; \
+			printf '%s\n' "$$block" | awk -v lut="$$lut" -v fn="$$fn" '\
+				index($$0, "R_MIPS_HI16") && index($$0, lut) { hi=1 } \
+				index($$0, "R_MIPS_LO16") && index($$0, lut) { lo=1 } \
+				/[[:space:]]sll[[:space:]]+t1,t0,0x2/ { if (!sll) sll=NR } \
+				/[[:space:]]addu[[:space:]]+t4,t4,t1/ { if (!addu) addu=NR } \
+				/[[:space:]]lw[[:space:]]+t4,0\(t4\)/ { \
+					if (!first) first=NR; else if (!second) second=NR; count++ \
+				} \
+				END { \
+					if (!hi || !lo) { print fn ": missing LUT global relocation" > "/dev/stderr"; exit 1 } \
+					if (!first || !second || count < 2) { print fn ": missing two-level LUT loads" > "/dev/stderr"; exit 1 } \
+					if (!sll || !addu) { print fn ": missing indexed LUT address arithmetic" > "/dev/stderr"; exit 1 } \
+					if (first >= sll) { print fn ": LUT base load follows index arithmetic" > "/dev/stderr"; exit 1 } \
+					if (second <= addu) { print fn ": LUT entry load precedes indexed address" > "/dev/stderr"; exit 1 } \
+				}'; \
 		done; \
 	done; \
 	echo 'qpsx-asm-classifier-cross-audit: MIPS assembly/disassembly verified for both RAM-helper modes'

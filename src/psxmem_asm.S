@@ -15,8 +15,8 @@
  *     - psxMemRead8_asm(u32 mem) -> u8
  *
  *   External symbols needed:
- *     - psxMemWLUT: Write LUT table (64K entries, each 4 bytes)
- *     - psxMemRLUT: Read LUT table
+ *     - psxMemWLUT: pointer to the Write LUT table (64K entries)
+ *     - psxMemRLUT: pointer to the Read LUT table (64K entries)
  *     - psxH: Hardware registers base
  *     - psxHwWrite32/16/8: HW write functions (extern "C" in psxhw.h)
  *     - psxHwRead32/16/8: HW read functions (extern "C" in psxhw.h)
@@ -71,6 +71,18 @@
     nop
     .endm
 
+/* psxMem{R,W}LUT are C u8 ** variables: the symbol names the global pointer,
+ * not the first LUT entry.  Load that pointer before applying t*4, then load
+ * the selected page pointer.  Keep the result in $t4 and the byte offset in
+ * $t3 so every helper has the same register contract. */
+    .macro QPSX_ASM_LUT_LOOKUP table
+    la      $t4, \table
+    lw      $t4, 0($t4)             /* $t4 = LUT base */
+    sll     $t1, $t0, 2             /* $t1 = t * 4 (pointer size) */
+    addu    $t4, $t4, $t1           /* $t4 = &LUT[t] */
+    lw      $t4, 0($t4)             /* $t4 = LUT[t] page pointer */
+    .endm
+
     .extern psxHwRead32
     .extern psxHwRead16
     .extern psxHwRead8
@@ -99,10 +111,7 @@ psxMemWrite32_asm:
      * RAM Fast Path (most common case)
      * Load LUT pointer: p = psxMemWLUT[t]
      *----------------------------------------------------------------------*/
-    la      $t4, psxMemWLUT         /* $t4 = &psxMemWLUT */
-    sll     $t1, $t0, 2             /* $t1 = t * 4 (pointer size) */
-    addu    $t4, $t4, $t1           /* $t4 = &psxMemWLUT[t] */
-    lw      $t4, 0($t4)             /* $t4 = p = psxMemWLUT[t] */
+    QPSX_ASM_LUT_LOOKUP psxMemWLUT
 
     beqz    $t4, .Lnull_ptr32       /* if p == NULL, handle error */
     nop
@@ -182,10 +191,7 @@ psxMemWrite16_asm:
     QPSX_ASM_HW_CLASSIFY .Lhw_write16
 
     /* RAM path */
-    la      $t4, psxMemWLUT
-    sll     $t1, $t0, 2
-    addu    $t4, $t4, $t1
-    lw      $t4, 0($t4)             /* $t4 = p = psxMemWLUT[t] */
+    QPSX_ASM_LUT_LOOKUP psxMemWLUT
 
     beqz    $t4, .Ldone16
     nop
@@ -248,10 +254,7 @@ psxMemWrite8_asm:
     QPSX_ASM_HW_CLASSIFY .Lhw_write8
 
     /* RAM path */
-    la      $t4, psxMemWLUT
-    sll     $t1, $t0, 2
-    addu    $t4, $t4, $t1
-    lw      $t4, 0($t4)             /* $t4 = p = psxMemWLUT[t] */
+    QPSX_ASM_LUT_LOOKUP psxMemWLUT
 
     beqz    $t4, .Ldone8
     nop
@@ -329,10 +332,7 @@ psxMemRead32_asm:
     QPSX_ASM_HW_CLASSIFY .Lhw_read32
 
     /* RAM/ROM path - use Read LUT */
-    la      $t4, psxMemRLUT
-    sll     $t1, $t0, 2
-    addu    $t4, $t4, $t1
-    lw      $t4, 0($t4)             /* $t4 = p = psxMemRLUT[t] */
+    QPSX_ASM_LUT_LOOKUP psxMemRLUT
 
     beqz    $t4, .Lread_null32
     nop
@@ -413,10 +413,7 @@ psxMemRead16_asm:
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_read16
 
-    la      $t4, psxMemRLUT
-    sll     $t1, $t0, 2
-    addu    $t4, $t4, $t1
-    lw      $t4, 0($t4)
+    QPSX_ASM_LUT_LOOKUP psxMemRLUT
 
     beqz    $t4, .Lread_null16
     nop
@@ -494,10 +491,7 @@ psxMemRead8_asm:
     /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
     QPSX_ASM_HW_CLASSIFY .Lhw_read8
 
-    la      $t4, psxMemRLUT
-    sll     $t1, $t0, 2
-    addu    $t4, $t4, $t1
-    lw      $t4, 0($t4)
+    QPSX_ASM_LUT_LOOKUP psxMemRLUT
 
     beqz    $t4, .Lread_null8
     nop
