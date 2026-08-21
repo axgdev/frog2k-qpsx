@@ -1520,6 +1520,59 @@ static void DrawText(uint16_t *buffer, int x, int y, uint16_t color, const char 
     }
 }
 
+/* The raw-VRAM presenter bypasses wrapped_video_cb(), so its diagnostic FPS
+ * text cannot be painted into the full 320x240 fallback surface.  Keep the
+ * two tiny opaque boxes in cache-friendly RGB565 strips and let the Linux GE
+ * presenter composite them after it has stretched the live PS1 VRAM. */
+static void DrawFBoxTight(uint16_t *buffer, unsigned width, unsigned height,
+                         int x, int y, int w, int h, uint16_t color)
+{
+    int end_y = y + h;
+    int end_x = x + w;
+    int row;
+
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (end_x > (int)width) end_x = (int)width;
+    if (end_y > (int)height) end_y = (int)height;
+    for (row = y; row < end_y; row++) {
+        int column;
+
+        for (column = x; column < end_x; column++)
+            buffer[(unsigned)row * width + (unsigned)column] = color;
+    }
+}
+
+static void DrawTextTight(uint16_t *buffer, unsigned width, unsigned height,
+                         int x, int y, uint16_t color, const char *text)
+{
+    int px = x;
+
+    while (*text) {
+        int c = *text - 32;
+
+        if (c >= 0 && c < 96) {
+            int column;
+
+            for (column = 0; column < 5; column++) {
+                unsigned char bits = font5x7[c][column];
+                int row;
+
+                for (row = 0; row < 7; row++) {
+                    int dx = px + column;
+                    int dy = y + row;
+
+                    if ((bits & (1 << row)) && dx >= 0 &&
+                        dx < (int)width && dy >= 0 && dy < (int)height)
+                        buffer[(unsigned)dy * width + (unsigned)dx] = color;
+                }
+            }
+        }
+        px += 6;
+        text++;
+    }
+}
+
 static void DrawSeparator(uint16_t *buffer, int x, int y, int w, uint16_t color)
 {
     for (int i = x; i < x + w && i < SCREEN_WIDTH; i++) {
@@ -1869,6 +1922,106 @@ static void draw_gpu_fps_overlay(uint16_t *pixels)
     int avg_dec = fps_avg_x100 % 100;
     snprintf(buf, sizeof(buf), "~%d.%02d", avg_int, avg_dec);
     DrawText(pixels, 284, 14, MENU_DIM, buf);
+}
+
+#define FPS_LEFT_OVERLAY_WIDTH  48u
+#define FPS_LEFT_OVERLAY_HEIGHT 11u
+#define FPS_RIGHT_OVERLAY_WIDTH 36u
+#define FPS_RIGHT_OVERLAY_HEIGHT 21u
+
+#ifdef __GNUC__
+static uint16_t fps_left_overlay[FPS_LEFT_OVERLAY_WIDTH *
+	FPS_LEFT_OVERLAY_HEIGHT] __attribute__((aligned(32)));
+static uint16_t fps_right_overlay[FPS_RIGHT_OVERLAY_WIDTH *
+	FPS_RIGHT_OVERLAY_HEIGHT] __attribute__((aligned(32)));
+#else
+static uint16_t fps_left_overlay[FPS_LEFT_OVERLAY_WIDTH *
+	FPS_LEFT_OVERLAY_HEIGHT];
+static uint16_t fps_right_overlay[FPS_RIGHT_OVERLAY_WIDTH *
+	FPS_RIGHT_OVERLAY_HEIGHT];
+#endif
+
+/* Rebuild only when the once-per-second counters change.  The raw path then
+ * pays two short GE source submissions but no 320x240 CPU framebuffer pass. */
+static int fps_overlay_cache_valid;
+static int fps_overlay_cache_fps;
+static int fps_overlay_cache_gpu_fps;
+static int fps_overlay_cache_target;
+static int fps_overlay_cache_average;
+
+extern "C" int qpsx_get_fps_overlays(const uint16_t **left,
+    unsigned *left_width, unsigned *left_height, size_t *left_pitch,
+    const uint16_t **right, unsigned *right_width, unsigned *right_height,
+    size_t *right_pitch)
+{
+    int native_fps;
+    int effective_fps;
+    int speed_pct;
+    int effective_gpu_fps;
+    int expected_gpu_fps;
+    uint16_t left_color;
+    uint16_t right_color;
+
+    if (!fps_show || menu_active || !left || !left_width || !left_height ||
+        !left_pitch || !right || !right_width || !right_height ||
+        !right_pitch)
+        return 0;
+
+    native_fps = Config.PsxType ? 50 : 60;
+    effective_fps = (fps_current * g_target_speed) / 100;
+    speed_pct = (effective_fps * 100) / native_fps;
+    if (speed_pct > 999) speed_pct = 999;
+    left_color = speed_pct >= 90 ? FPS_GOOD :
+        speed_pct >= 60 ? FPS_OK : FPS_BAD;
+
+    effective_gpu_fps = (gpu_fps_current * g_target_speed) / 100;
+    expected_gpu_fps = (native_fps * g_target_speed) / 100;
+    right_color = effective_gpu_fps >= (expected_gpu_fps * 90) / 100 ?
+        FPS_GOOD : effective_gpu_fps >= (expected_gpu_fps * 60) / 100 ?
+        FPS_OK : FPS_BAD;
+
+    if (!fps_overlay_cache_valid || fps_overlay_cache_fps != fps_current ||
+        fps_overlay_cache_gpu_fps != gpu_fps_current ||
+        fps_overlay_cache_target != g_target_speed ||
+        fps_overlay_cache_average != fps_avg_x100) {
+        char buf[16];
+
+        memset(fps_left_overlay, 0, sizeof(fps_left_overlay));
+        DrawFBoxTight(fps_left_overlay, FPS_LEFT_OVERLAY_WIDTH,
+            FPS_LEFT_OVERLAY_HEIGHT, 0, 0, FPS_LEFT_OVERLAY_WIDTH,
+            FPS_LEFT_OVERLAY_HEIGHT, FPS_BG);
+        snprintf(buf, sizeof(buf), "%3d%% %2d", speed_pct, effective_fps);
+        DrawTextTight(fps_left_overlay, FPS_LEFT_OVERLAY_WIDTH,
+            FPS_LEFT_OVERLAY_HEIGHT, 2, 2, left_color, buf);
+
+        memset(fps_right_overlay, 0, sizeof(fps_right_overlay));
+        DrawFBoxTight(fps_right_overlay, FPS_RIGHT_OVERLAY_WIDTH,
+            FPS_RIGHT_OVERLAY_HEIGHT, 0, 0, FPS_RIGHT_OVERLAY_WIDTH,
+            FPS_RIGHT_OVERLAY_HEIGHT, FPS_BG);
+        snprintf(buf, sizeof(buf), "%2d", effective_gpu_fps);
+        DrawTextTight(fps_right_overlay, FPS_RIGHT_OVERLAY_WIDTH,
+            FPS_RIGHT_OVERLAY_HEIGHT, 14, 2, right_color, buf);
+        snprintf(buf, sizeof(buf), "~%d.%02d", fps_avg_x100 / 100,
+            fps_avg_x100 % 100);
+        DrawTextTight(fps_right_overlay, FPS_RIGHT_OVERLAY_WIDTH,
+            FPS_RIGHT_OVERLAY_HEIGHT, 2, 12, MENU_DIM, buf);
+
+        fps_overlay_cache_fps = fps_current;
+        fps_overlay_cache_gpu_fps = gpu_fps_current;
+        fps_overlay_cache_target = g_target_speed;
+        fps_overlay_cache_average = fps_avg_x100;
+        fps_overlay_cache_valid = 1;
+    }
+
+    *left = fps_left_overlay;
+    *left_width = FPS_LEFT_OVERLAY_WIDTH;
+    *left_height = FPS_LEFT_OVERLAY_HEIGHT;
+    *left_pitch = FPS_LEFT_OVERLAY_WIDTH * sizeof(uint16_t);
+    *right = fps_right_overlay;
+    *right_width = FPS_RIGHT_OVERLAY_WIDTH;
+    *right_height = FPS_RIGHT_OVERLAY_HEIGHT;
+    *right_pitch = FPS_RIGHT_OVERLAY_WIDTH * sizeof(uint16_t);
+    return 1;
 }
 
 static void update_fps_counter(void)

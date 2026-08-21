@@ -40,6 +40,28 @@ extern volatile int skip_video_output;
 extern "C" void sf2000_video_vram(const void *data, unsigned width,
                                   unsigned height, size_t pitch)
     __attribute__((weak));
+extern "C" void sf2000_video_vram_fps(const void *data, unsigned width,
+                                       unsigned height, size_t pitch,
+                                       const void *left, unsigned left_width,
+                                       unsigned left_height, size_t left_pitch,
+                                       const void *right,
+                                       unsigned right_width,
+                                       unsigned right_height,
+                                       size_t right_pitch)
+    __attribute__((weak));
+
+/* The core owns these tiny diagnostic strips.  Keeping the query weak lets
+ * the standalone/UniFrog port retain the ordinary raw path when the Linux
+ * GE overlay entry point is not linked. */
+extern "C" int qpsx_get_fps_overlays(const uint16_t **left,
+                                     unsigned *left_width,
+                                     unsigned *left_height,
+                                     size_t *left_pitch,
+                                     const uint16_t **right,
+                                     unsigned *right_width,
+                                     unsigned *right_height,
+                                     size_t *right_pitch)
+    __attribute__((weak));
 
 /* v295: GPU frame counter - counts ACTUAL rendered frames (not skipped/duped) */
 volatile int gpu_frame_count = 0;
@@ -138,6 +160,15 @@ void video_flip_framebuffer(const unsigned short *buffer)
 int video_flip_vram(const unsigned short *buffer, unsigned width,
                     unsigned height, size_t pitch)
 {
+    const uint16_t *left = NULL;
+    const uint16_t *right = NULL;
+    unsigned left_width = 0;
+    unsigned left_height = 0;
+    size_t left_pitch = 0;
+    unsigned right_width = 0;
+    unsigned right_height = 0;
+    size_t right_pitch = 0;
+
     if (!sf2000_video_vram || !buffer || !width || !height)
         return 0;
     if (skip_video_output) {
@@ -148,7 +179,16 @@ int video_flip_vram(const unsigned short *buffer, unsigned width,
         return 1;
     }
     gpu_frame_count++;
-    sf2000_video_vram(buffer, width, height, pitch);
+    if (sf2000_video_vram_fps && qpsx_get_fps_overlays &&
+        qpsx_get_fps_overlays(&left, &left_width, &left_height,
+                              &left_pitch, &right, &right_width,
+                              &right_height, &right_pitch)) {
+        sf2000_video_vram_fps(buffer, width, height, pitch,
+                              left, left_width, left_height, left_pitch,
+                              right, right_width, right_height, right_pitch);
+    } else {
+        sf2000_video_vram(buffer, width, height, pitch);
+    }
     return 1;
 }
 
