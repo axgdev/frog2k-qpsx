@@ -20,10 +20,6 @@
 #ifndef QPSX_GPU_DMA_CHAIN_FAST
 #define QPSX_GPU_DMA_CHAIN_FAST 0
 #endif
-#if QPSX_GPU_DMA_CHAIN_FAST
-#include "gpu_dma_chain_fast.h"
-#endif
-
 /* SF2000 xlog debugging */
 #ifdef SF2000
 extern "C" {
@@ -144,7 +140,11 @@ static noinline void decide_frameskip(void)
   }
 }
 
+#if QPSX_GPU_DMA_CHAIN_FAST
+noinline int decide_frameskip_allow(uint32_t cmd_e3)
+#else
 static noinline int decide_frameskip_allow(uint32_t cmd_e3)
+#endif
 {
   // no frameskip if it decides to draw to display area,
   // but not for interlace since it'll most likely always do that
@@ -587,11 +587,11 @@ qpsx_gpu_do_cmd_buffer_body(uint32_t *data, int count,
   return count - pos;
 }
 
-/* Defined after GPU_dmaChain so the optional path does not move this helper
- * into the middle of the command-parser hot section.  It runs once per
- * completed command buffer (or safe chain), never per packet. */
-QPSX_HOT_GPU static noinline void
-qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3);
+#if QPSX_GPU_DMA_CHAIN_FAST
+/* The implementation lives in a separate object so enabling the optional
+ * path does not move the parser/chain text within gpu.o. */
+extern void qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3);
+#endif
 
 QPSX_HOT_GPU static noinline int do_cmd_buffer(uint32_t *data, int count)
 {
@@ -805,24 +805,6 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
 
   return cpu_cycles;
 }
-
-#if QPSX_GPU_DMA_CHAIN_FAST
-/* Keep this cold relative to the parser and chain traversal.  The guarded
- * path calls it only once at the end of a safe chain, or once when it must
- * fall back to legacy per-node publication. */
-QPSX_HOT_GPU static noinline __attribute__((section(".text.zzz_qpsx_dma_finish"))) void
-qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3)
-{
-  gpu.status.reg &= ~0x1fff;
-  gpu.status.reg |= gpu.ex_regs[1] & 0x7ff;
-  gpu.status.reg |= (gpu.ex_regs[6] & 3) << 11;
-
-  gpu.state.fb_dirty |= vram_dirty;
-
-  if (qpsx_gpu_dma_chain_finish_needed(old_e3, gpu.ex_regs[3]))
-    decide_frameskip_allow(gpu.ex_regs[3]);
-}
-#endif
 
 void GPU_readDataMem(uint32_t *mem, int count)
 {
