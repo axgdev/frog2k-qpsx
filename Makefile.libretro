@@ -79,8 +79,8 @@ QPSX_GTE_OPCODE_COUNTER ?= 0
 QPSX_GTE_INTPL_OPTIMIZE ?= 0
 QPSX_GTE_INTPL_COMPACT ?= 0
 QPSX_GTE_RTPT_OS ?= 0
-# Hand-written leaf RTPT kernel for a dedicated no-saturation physical A/B.
-# It is opt-in; normal builds retain the exact C implementation.
+# Hand-written leaf RTPT kernel for a dedicated MIPS32 physical A/B.  It is
+# opt-in; normal builds retain the exact C implementation.
 QPSX_GTE_RTPT_ASM_FAST ?= 0
 # Emit one architecturally harmless, uniquely encoded MIPS no-op per
 # retro_run.  QEMU's cache oracle recognizes it as an exact frame boundary;

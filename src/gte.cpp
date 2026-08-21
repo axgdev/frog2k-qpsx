@@ -68,7 +68,9 @@
 #define QPSX_GTE_RTPT_ASM_FAST 0
 #endif
 #if QPSX_GTE_RTPT_ASM_FAST && defined(__mips__)
-extern "C" void gte_RTPT_asm(void);
+/* Returns 1 after the leaf committed saturated PS1-visible results.  A zero
+ * return remains reserved for future guards that need the exact C fallback. */
+extern "C" int gte_RTPT_asm(void);
 #endif
 
 /* Keep the normal GTE path byte-for-byte free of diagnostic state.  The
@@ -575,9 +577,10 @@ QPSX_GTE_RTPT_OPT void gteRTPT(void) {
 #endif
 	PROFILE_START(PROF_GTE_RTPT);
 	#if QPSX_GTE_RTPT_ASM_FAST && defined(__mips__)
-	gte_RTPT_asm();
-	PROFILE_END(PROF_GTE_RTPT);
-	return;
+	if (gte_RTPT_asm()) {
+		PROFILE_END(PROF_GTE_RTPT);
+		return;
+	}
 	#endif
 	gteFLAG = 0;
 

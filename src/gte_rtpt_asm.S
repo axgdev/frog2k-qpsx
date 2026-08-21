@@ -7,9 +7,12 @@
  * without dragging those unresolved experiments into Linux builds.
  *
  * The caller selects this routine only for the explicit SF2000 A/B build.
- * It implements the normal PS1 fixed-point envelope (no saturation/overflow
- * checks), uses the MIPS32 HI/LO multiply accumulator, and makes no C calls.
- * The regular C RTPT remains the compatibility path.
+ * It implements the normal PS1 fixed-point envelope, uses the MIPS32 HI/LO
+ * multiply accumulator, and makes no C calls.  Visible IR, depth, projection
+ * and IR0 results are saturated with the same integer bounds as the C path,
+ * so an outlier cannot wrap into a bogus polygon.  It returns 1 after
+ * committing all results; the C wrapper retains a zero-return escape hatch
+ * for future hardware-specific guard experiments.
  ***************************************************************************/
 
 .set noreorder
@@ -117,6 +120,21 @@ gte_RTPT_asm:
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
     sw      $v0, OFF_MAC1($t0)
+    /* limB1: saturate IR1 instead of wrapping it.  The MAC register keeps
+     * the unsaturated result, as on the GTE. */
+    sll     $v1, $v0, 16
+    sra     $v1, $v1, 16
+    beq     $v1, $v0, 9f
+    nop
+    slt     $v1, $v0, $zero
+    bne     $v1, $zero, 8f
+    nop
+    li      $v0, 32767
+    b       9f
+    nop
+8:
+    li      $v0, -32768
+9:
     sh      $v0, OFF_IR1($t0)
 
     /* MAC2 = TRY + (R21*vx + R22*vy + R23*vz) / 4096. */
@@ -133,6 +151,20 @@ gte_RTPT_asm:
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
     sw      $v0, OFF_MAC2($t0)
+    /* limB2: saturate IR2. */
+    sll     $v1, $v0, 16
+    sra     $v1, $v1, 16
+    beq     $v1, $v0, 9f
+    nop
+    slt     $v1, $v0, $zero
+    bne     $v1, $zero, 8f
+    nop
+    li      $v0, 32767
+    b       9f
+    nop
+8:
+    li      $v0, -32768
+9:
     sh      $v0, OFF_IR2($t0)
 
     /* MAC3/depth = TRZ + (R31*vx + R32*vy + R33*vz) / 4096. */
@@ -149,7 +181,36 @@ gte_RTPT_asm:
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
     sw      $v0, OFF_MAC3($t0)
+    /* limB3: saturate IR3. */
+    sll     $v1, $v0, 16
+    sra     $v1, $v1, 16
+    beq     $v1, $v0, 9f
+    nop
+    slt     $v1, $v0, $zero
+    bne     $v1, $zero, 8f
+    nop
+    li      $v0, 32767
+    b       9f
+    nop
+8:
+    li      $v0, -32768
+9:
     sh      $v0, OFF_IR3($t0)
+    /* limD: depth is an unsigned 16-bit saturated value. */
+    beq     $v0, $zero, 7f
+    nop
+    slt     $v1, $v0, $zero
+    bne     $v1, $zero, 7f
+    nop
+    srl     $v1, $v0, 16
+    beq     $v1, $zero, 6f
+    nop
+    li      $v0, 65535
+    b       6f
+    nop
+7:
+    move    $v0, $zero
+6:
     sh      $v0, \SZOFF($t0)
 
     /* Native MIPS divide implements H << 16 / SZ.  GAS's two-operand
@@ -161,15 +222,23 @@ gte_RTPT_asm:
      * envelope.  Reusing V0 avoids a dependent D-cache load per vertex. */
     andi    $a3, $v0, 0xffff
     sll     $v0, $t4, 16
-    bnez    $a3, 1f
-    .word   0x0047001b                   /* delay slot: divu $zero,$v0,$a3 */
+    /* DIVIDE returns 0xffffffff (then limE caps to 0x1ffff) whenever
+     * H >= 2*SZ.  Preserve that behavior instead of producing an enormous
+     * quotient that wraps screen coordinates. */
+    beq     $a3, $zero, 3f
+    nop
+    sll     $v1, $a3, 1
+    sltu    $v1, $t4, $v1
+    beq     $v1, $zero, 3f
+    nop
+    .word   0x0047001b                   /* divu $zero,$v0,$a3 */
+    mflo    $a2                         /* quotient, retained for Y/IR0 */
+    b       4f
+    nop
+3:
     lui     $a2, 2                       /* limE(0xffffffff) = 0x1ffff */
     addiu   $a2, $a2, -1
-    b       2f
-    nop
-1:
-    mflo    $a2                         /* quotient, retained for Y/IR0 */
-2:
+4:
     lh      $a0, OFF_IR1($t0)
     lh      $a1, OFF_IR2($t0)
 
@@ -177,24 +246,56 @@ gte_RTPT_asm:
     mult    $a0, $a2
     mflo    $v0
     mfhi    $v1
+    sra     $a3, $t5, 31
+    addu    $v1, $v1, $a3
     addu    $v0, $v0, $t5
     sltu    $a3, $v0, $t5
     addu    $v1, $v1, $a3
     srl     $v0, $v0, 16
     sll     $v1, $v1, 16
     addu    $v0, $v0, $v1
+    /* limG1: saturate screen X to the signed 11-bit range. */
+    addiu   $a3, $v0, 1024
+    sltiu   $v1, $a3, 2048
+    bne     $v1, $zero, 5f
+    nop
+    slt     $v1, $v0, $zero
+    bne     $v1, $zero, 4f
+    nop
+    li      $v0, 1023
+    b       5f
+    nop
+4:
+    li      $v0, -1024
+5:
     sh      $v0, \SXYOFF($t0)
 
     /* SY = (OFY + IR2*quotient) >> 16. */
     mult    $a1, $a2
     mflo    $v0
     mfhi    $v1
+    sra     $a3, $t6, 31
+    addu    $v1, $v1, $a3
     addu    $v0, $v0, $t6
     sltu    $a3, $v0, $t6
     addu    $v1, $v1, $a3
     srl     $v0, $v0, 16
     sll     $v1, $v1, 16
     addu    $v0, $v0, $v1
+    /* limG2: saturate screen Y to the signed 11-bit range. */
+    addiu   $a3, $v0, 1024
+    sltiu   $v1, $a3, 2048
+    bne     $v1, $zero, 5f
+    nop
+    slt     $v1, $v0, $zero
+    bne     $v1, $zero, 4f
+    nop
+    li      $v0, 1023
+    b       5f
+    nop
+4:
+    li      $v0, -1024
+5:
     sh      $v0, \SXYOFF+2($t0)
 .endm
 
@@ -206,6 +307,8 @@ gte_RTPT_asm:
     mult    $t7, $a2
     mflo    $v0
     mfhi    $v1
+    sra     $a3, $t8, 31
+    addu    $v1, $v1, $a3
     addu    $v0, $v0, $t8
     sltu    $a3, $v0, $t8
     addu    $v1, $v1, $a3
@@ -213,6 +316,19 @@ gte_RTPT_asm:
     srl     $v0, $v0, 12
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
+    /* limH: saturate IR0 to [0, 0x1000]. */
+    sltiu   $v1, $v0, 4097
+    bne     $v1, $zero, 2f
+    nop
+    slt     $v1, $v0, $zero
+    bne     $v1, $zero, 1f
+    nop
+    li      $v0, 4096
+    b       2f
+    nop
+1:
+    move    $v0, $zero
+2:
     sh      $v0, OFF_IR0($t0)
 
     lw      $s0, 0($sp)
@@ -224,6 +340,24 @@ gte_RTPT_asm:
     lw      $s6, 24($sp)
     lw      $s7, 28($sp)
     addiu   $sp, $sp, 32
+    li      $v0, 1
+    jr      $ra
+    nop
+
+RTPT_FAIL:
+    /* Restore the callee-saved register set.  The C caller resets FLAG and
+     * rewrites every RTPT-visible register, so partial speculative stores
+     * above are harmless. */
+    lw      $s0, 0($sp)
+    lw      $s1, 4($sp)
+    lw      $s2, 8($sp)
+    lw      $s3, 12($sp)
+    lw      $s4, 16($sp)
+    lw      $s5, 20($sp)
+    lw      $s6, 24($sp)
+    lw      $s7, 28($sp)
+    addiu   $sp, $sp, 32
+    move    $v0, $zero
     jr      $ra
     nop
 .end gte_RTPT_asm
