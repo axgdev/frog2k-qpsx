@@ -91,6 +91,9 @@
 #ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
 #define QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES 0
 #endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL
+#define QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL 0
+#endif
 #ifndef QPSX_GPU_GOURAUD_LINE_FLATFAST
 #define QPSX_GPU_GOURAUD_LINE_FLATFAST 0
 #endif
@@ -424,6 +427,39 @@ qpsx_gpu_poly_span_4bpp_fullmask(const gpu_unai_t &gpu_unai,
 			++pDst;
 			++packed_row;
 			--count;
+		}
+	#endif
+	#if QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES && QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL
+		/* Once alignment and the odd-pixel tail are peeled, consume two
+		 * source bytes at a time.  This keeps the same transparent-entry
+		 * fallback as the pair kernel while cutting the loop branch/count
+		 * update frequency in half.  The unrolled body lives in this cold
+		 * helper, so it does not enlarge the CF=32 dispatch template. */
+		while (count >= 4) {
+			const u8 packed0 = *packed_row++;
+			const u8 packed1 = *packed_row++;
+			const u16 src00 = cba[packed0 & 0xfu];
+			const u16 src01 = cba[packed0 >> 4];
+			const u16 src10 = cba[packed1 & 0xfu];
+			const u16 src11 = cba[packed1 >> 4];
+			if (src00 && src01)
+				*(u32 *)(void *)pDst = (u32)src00 | ((u32)src01 << 16);
+			else {
+				if (src00)
+					pDst[0] = src00;
+				if (src01)
+					pDst[1] = src01;
+			}
+			if (src10 && src11)
+				*(u32 *)(void *)(pDst + 2) = (u32)src10 | ((u32)src11 << 16);
+			else {
+				if (src10)
+					pDst[2] = src10;
+				if (src11)
+					pDst[3] = src11;
+			}
+			pDst += 4;
+			count -= 4;
 		}
 	#endif
 		while (count >= 2) {
