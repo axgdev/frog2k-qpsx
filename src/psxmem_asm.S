@@ -340,14 +340,16 @@ psxMemRead32_asm:
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read32:
 #if QPSX_ASM_HAS_PSMEM_REG
-    addu    $t4, $s7, $zero           /* t4 = live psxM base */
+    sll     $t5, $a0, 11             /* keep the low 21 address bits */
+    srl     $t5, $t5, 11
+    addu    $t4, $s7, $t5             /* t4 = live psxM + offset */
 #else
     la      $t4, psxM
     lw      $t4, 0($t4)              /* t4 = psxM base */
-#endif
-    sll     $t5, $a0, 11             /* keep the low 21 address bits */
+    sll     $t5, $a0, 11
     srl     $t5, $t5, 11
     addu    $t4, $t4, $t5
+#endif
     lw      $v0, 0($t4)
     jr      $ra
     nop
@@ -423,14 +425,16 @@ psxMemRead16_asm:
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read16:
 #if QPSX_ASM_HAS_PSMEM_REG
-    addu    $t4, $s7, $zero
+    sll     $t5, $a0, 11
+    srl     $t5, $t5, 11
+    addu    $t4, $s7, $t5
 #else
     la      $t4, psxM
     lw      $t4, 0($t4)
-#endif
     sll     $t5, $a0, 11
     srl     $t5, $t5, 11
     addu    $t4, $t4, $t5
+#endif
     lhu     $v0, 0($t4)
     jr      $ra
     nop
@@ -504,14 +508,16 @@ psxMemRead8_asm:
 #if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
 .Lram_read8:
 #if QPSX_ASM_HAS_PSMEM_REG
-    addu    $t4, $s7, $zero
+    sll     $t5, $a0, 11
+    srl     $t5, $t5, 11
+    addu    $t4, $s7, $t5
 #else
     la      $t4, psxM
     lw      $t4, 0($t4)
-#endif
     sll     $t5, $a0, 11
     srl     $t5, $t5, 11
     addu    $t4, $t4, $t5
+#endif
     lbu     $v0, 0($t4)
     jr      $ra
     nop
