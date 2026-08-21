@@ -807,3 +807,56 @@ const PP gpuPolySpanDrivers[2048] = {
 #undef TN
 #undef TIBLOCK
 #undef POLY_CANONICAL_FLAGS
+
+///////////////////////////////////////////////////////////////////////////////
+// Optional renderer-driver histogram.  The production build leaves these
+// wrappers as the original direct table accesses, so there is no counter or
+// branch in the hot path.  A diagnostic build can enable the histogram to
+// identify the small set of inner-loop variants that account for most of the
+// work on a particular game/scene.  Keeping the counters here makes them
+// local to the translation unit that owns the renderer and avoids a data
+// relocation on the NOMMU target.
+#ifndef QPSX_GPU_RUNTIME_METRICS
+#define QPSX_GPU_RUNTIME_METRICS 0
+#endif
+
+#if QPSX_GPU_RUNTIME_METRICS
+static u32 qpsx_gpu_poly_hist[2048];
+static u32 qpsx_gpu_sprite_hist[256];
+static u32 qpsx_gpu_pixel_hist[64];
+static u32 qpsx_gpu_tile_hist[32];
+
+static inline PP qpsx_gpu_poly_driver(u32 index)
+{
+	++qpsx_gpu_poly_hist[index];
+	return gpuPolySpanDrivers[index];
+}
+
+static inline PS qpsx_gpu_sprite_driver(u32 index)
+{
+	++qpsx_gpu_sprite_hist[index];
+	return gpuSpriteSpanDrivers[index];
+}
+
+static inline PSD qpsx_gpu_pixel_driver(u32 index)
+{
+	++qpsx_gpu_pixel_hist[index];
+	return gpuPixelSpanDrivers[index];
+}
+
+static inline PT qpsx_gpu_tile_driver(u32 index)
+{
+	++qpsx_gpu_tile_hist[index];
+	return gpuTileSpanDrivers[index];
+}
+
+#define QPSX_GPU_POLY_DRIVER(index) qpsx_gpu_poly_driver((u32)(index))
+#define QPSX_GPU_SPRITE_DRIVER(index) qpsx_gpu_sprite_driver((u32)(index))
+#define QPSX_GPU_PIXEL_DRIVER(index) qpsx_gpu_pixel_driver((u32)(index))
+#define QPSX_GPU_TILE_DRIVER(index) qpsx_gpu_tile_driver((u32)(index))
+#else
+#define QPSX_GPU_POLY_DRIVER(index) gpuPolySpanDrivers[(index)]
+#define QPSX_GPU_SPRITE_DRIVER(index) gpuSpriteSpanDrivers[(index)]
+#define QPSX_GPU_PIXEL_DRIVER(index) gpuPixelSpanDrivers[(index)]
+#define QPSX_GPU_TILE_DRIVER(index) gpuTileSpanDrivers[(index)]
+#endif

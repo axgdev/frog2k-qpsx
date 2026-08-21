@@ -172,11 +172,11 @@ void gpuSendPacketFunction(const int PRIM)
 			if (!gpu_unai.frameskip.skipGPU)
 			{
 				NULL_GPU();
-				PP driver = gpuPolySpanDrivers[
+				PP driver = QPSX_GPU_POLY_DRIVER(
 					(gpu_unai.blit_mask?1024:0) |
 					Blending_Mode |
 					gpu_unai.Masking | Blending | gpu_unai.PixelMSB
-				];
+				);
 				gpuDrawPolyF(packet, driver, false);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyF(0x%x)\n",PRIM));
@@ -206,7 +206,7 @@ void gpuSendPacketFunction(const int PRIM)
 						driver_idx |= Lighting;
 				}
 
-				PP driver = gpuPolySpanDrivers[driver_idx];
+				PP driver = QPSX_GPU_POLY_DRIVER(driver_idx);
 				gpuDrawPolyFT(packet, driver, false);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyFT(0x%x)\n",PRIM));
@@ -220,11 +220,11 @@ void gpuSendPacketFunction(const int PRIM)
 			if (!gpu_unai.frameskip.skipGPU)
 			{
 				NULL_GPU();
-				PP driver = gpuPolySpanDrivers[
+				PP driver = QPSX_GPU_POLY_DRIVER(
 					(gpu_unai.blit_mask?1024:0) |
 					Blending_Mode |
 					gpu_unai.Masking | Blending | gpu_unai.PixelMSB
-				];
+				);
 				gpuDrawPolyF(packet, driver, true); // is_quad = true
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyF(0x%x) (4-pt QUAD)\n",PRIM));
@@ -254,7 +254,7 @@ void gpuSendPacketFunction(const int PRIM)
 						driver_idx |= Lighting;
 				}
 
-				PP driver = gpuPolySpanDrivers[driver_idx];
+				PP driver = QPSX_GPU_POLY_DRIVER(driver_idx);
 				gpuDrawPolyFT(packet, driver, true); // is_quad = true
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyFT(0x%x) (4-pt QUAD)\n",PRIM));
@@ -272,12 +272,12 @@ void gpuSendPacketFunction(const int PRIM)
 				// this is an untextured poly, so CF_LIGHT (texture blend)
 				// shouldn't apply. Until the original array of template
 				// instantiation ptrs is fixed, we're stuck with this. (TODO)
-				PP driver = gpuPolySpanDrivers[
+				PP driver = QPSX_GPU_POLY_DRIVER(
 					(gpu_unai.blit_mask?1024:0) |
 					Dithering |
 					Blending_Mode |
 					gpu_unai.Masking | Blending | 129 | gpu_unai.PixelMSB
-				];
+				);
 				gpuDrawPolyG(packet, driver, false);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyG(0x%x)\n",PRIM));
@@ -293,12 +293,12 @@ void gpuSendPacketFunction(const int PRIM)
 				NULL_GPU();
 				gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
 				gpuSetTexture (gpu_unai.PacketBuffer.U4[5] >> 16);
-				PP driver = gpuPolySpanDrivers[
+				PP driver = QPSX_GPU_POLY_DRIVER(
 					(gpu_unai.blit_mask?1024:0) |
 					Dithering |
 					Blending_Mode | gpu_unai.TEXT_MODE |
 					gpu_unai.Masking | Blending | ((Lighting)?129:0) | gpu_unai.PixelMSB
-				];
+				);
 				gpuDrawPolyGT(packet, driver, false);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyGT(0x%x)\n",PRIM));
@@ -313,12 +313,12 @@ void gpuSendPacketFunction(const int PRIM)
 			{
 				NULL_GPU();
 				// See notes regarding '129' for 0x30..0x33 further above -senquack
-				PP driver = gpuPolySpanDrivers[
+				PP driver = QPSX_GPU_POLY_DRIVER(
 					(gpu_unai.blit_mask?1024:0) |
 					Dithering |
 					Blending_Mode |
 					gpu_unai.Masking | Blending | 129 | gpu_unai.PixelMSB
-				];
+				);
 				gpuDrawPolyG(packet, driver, true); // is_quad = true
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyG(0x%x) (4-pt QUAD)\n",PRIM));
@@ -334,12 +334,12 @@ void gpuSendPacketFunction(const int PRIM)
 				NULL_GPU();
 				gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
 				gpuSetTexture (gpu_unai.PacketBuffer.U4[5] >> 16);
-				PP driver = gpuPolySpanDrivers[
+				PP driver = QPSX_GPU_POLY_DRIVER(
 					(gpu_unai.blit_mask?1024:0) |
 					Dithering |
 					Blending_Mode | gpu_unai.TEXT_MODE |
 					gpu_unai.Masking | Blending | ((Lighting)?129:0) | gpu_unai.PixelMSB
-				];
+				);
 				gpuDrawPolyGT(packet, driver, true); // is_quad = true
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawPolyGT(0x%x) (4-pt QUAD)\n",PRIM));
@@ -355,7 +355,7 @@ void gpuSendPacketFunction(const int PRIM)
 				NULL_GPU();
 				// Shift index right by one, as untextured prims don't use lighting
 				u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
-				PSD driver = gpuPixelSpanDrivers[driver_idx];
+				PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
 				gpuDrawLineF(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawLineF(0x%x)\n",PRIM));
@@ -375,7 +375,7 @@ void gpuSendPacketFunction(const int PRIM)
 				NULL_GPU();
 				// Shift index right by one, as untextured prims don't use lighting
 				u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
-				PSD driver = gpuPixelSpanDrivers[driver_idx];
+				PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
 				gpuDrawLineF(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawLineF(0x%x)\n",PRIM));
@@ -400,7 +400,7 @@ void gpuSendPacketFunction(const int PRIM)
 				u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
 				// Index MSB selects Gouraud-shaded PixelSpanDriver:
 				driver_idx |= (1 << 5);
-				PSD driver = gpuPixelSpanDrivers[driver_idx];
+				PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
 				gpuDrawLineG(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawLineG(0x%x)\n",PRIM));
@@ -422,7 +422,7 @@ void gpuSendPacketFunction(const int PRIM)
 				u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
 				// Index MSB selects Gouraud-shaded PixelSpanDriver:
 				driver_idx |= (1 << 5);
-				PSD driver = gpuPixelSpanDrivers[driver_idx];
+				PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
 				gpuDrawLineG(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawLineG(0x%x)\n",PRIM));
@@ -445,7 +445,7 @@ void gpuSendPacketFunction(const int PRIM)
 			if (!gpu_unai.frameskip.skipGPU)
 			{
 				NULL_GPU();
-				PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+				PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
 				gpuDrawT(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawT(0x%x)\n",PRIM));
@@ -477,7 +477,7 @@ void gpuSendPacketFunction(const int PRIM)
 				// Strip lower 3 bits of each color and determine if lighting should be used:
 				if ((gpu_unai.PacketBuffer.U4[0] & 0xF8F8F8) != 0x808080)
 					driver_idx |= Lighting;
-				PS driver = gpuSpriteSpanDrivers[driver_idx];
+				PS driver = QPSX_GPU_SPRITE_DRIVER(driver_idx);
 				gpuDrawS(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawS(0x%x)\n",PRIM));
@@ -492,7 +492,7 @@ void gpuSendPacketFunction(const int PRIM)
 			{
 				NULL_GPU();
 				gpu_unai.PacketBuffer.U4[2] = 0x00010001;
-				PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+				PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
 				gpuDrawT(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawT(0x%x)\n",PRIM));
@@ -507,7 +507,7 @@ void gpuSendPacketFunction(const int PRIM)
 			{
 				NULL_GPU();
 				gpu_unai.PacketBuffer.U4[2] = 0x00080008;
-				PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+				PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
 				gpuDrawT(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawT(0x%x)\n",PRIM));
@@ -530,7 +530,7 @@ void gpuSendPacketFunction(const int PRIM)
 				// Strip lower 3 bits of each color and determine if lighting should be used:
 				if ((gpu_unai.PacketBuffer.U4[0] & 0xF8F8F8) != 0x808080)
 					driver_idx |= Lighting;
-				PS driver = gpuSpriteSpanDrivers[driver_idx];
+				PS driver = QPSX_GPU_SPRITE_DRIVER(driver_idx);
 				gpuDrawS(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawS(0x%x)\n",PRIM));
@@ -545,7 +545,7 @@ void gpuSendPacketFunction(const int PRIM)
 			{
 				NULL_GPU();
 				gpu_unai.PacketBuffer.U4[2] = 0x00100010;
-				PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+				PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
 				gpuDrawT(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawT(0x%x)\n",PRIM));
@@ -578,7 +578,7 @@ void gpuSendPacketFunction(const int PRIM)
 				// Strip lower 3 bits of each color and determine if lighting should be used:
 				if ((gpu_unai.PacketBuffer.U4[0] & 0xF8F8F8) != 0x808080)
 					driver_idx |= Lighting;
-				PS driver = gpuSpriteSpanDrivers[driver_idx];
+				PS driver = QPSX_GPU_SPRITE_DRIVER(driver_idx);
 				gpuDrawS(packet, driver);
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawS(0x%x)\n",PRIM));

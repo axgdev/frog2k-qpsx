@@ -62,6 +62,9 @@
 #ifndef QPSX_RUNTIME_TELEMETRY
 #define QPSX_RUNTIME_TELEMETRY 0
 #endif
+#ifndef QPSX_GPU_RUNTIME_METRICS
+#define QPSX_GPU_RUNTIME_METRICS 0
+#endif
 #if QPSX_PLATFORM_UNIFROG && QPSX_PLATFORM_LINUX
 #error "QPSX platform selection is ambiguous"
 #endif
@@ -87,6 +90,12 @@ extern "C" {
  * normal retro_deinit()) expose those counters without adding a per-frame
  * timer or a per-instruction profiler hook. */
 extern "C" void recLogTelemetry(void);
+#endif
+#if QPSX_GPU_RUNTIME_METRICS
+/* The QEMU/physical benchmark may stop without a normal core shutdown.  A
+ * periodic report therefore makes the primitive histogram observable while
+ * preserving the production build's zero-cost path. */
+extern "C" void renderer_log_metrics(void);
 #endif
 
 /*
@@ -3722,9 +3731,14 @@ void retro_run(void)
     if (g_debug_log_enabled && (run_frame_count % 60 == 0)) {
         XLOG("retro_run progress: frame %d", run_frame_count);
     }
-#if QPSX_RUNTIME_TELEMETRY
+#if QPSX_RUNTIME_TELEMETRY || QPSX_GPU_RUNTIME_METRICS
     if ((run_frame_count % 600) == 0) {
+#if QPSX_RUNTIME_TELEMETRY
         recLogTelemetry();
+#endif
+#if QPSX_GPU_RUNTIME_METRICS
+        renderer_log_metrics();
+#endif
     }
 #endif
 
