@@ -81,6 +81,12 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_RECIP_TABLE_BITS
 #define QPSX_GPU_RECIP_TABLE_BITS 0
 #endif
+#ifndef QPSX_GPU_4BPP_FULLMASK
+#define QPSX_GPU_4BPP_FULLMASK 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS
+#define QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS 16
+#endif
 #if defined(SHMEM_MIRRORING) || defined(TMPFS_MIRRORING)
 #define QPSX_MIPS_VIRTUAL_MIRRORING 1
 #else
@@ -189,7 +195,7 @@ int psxInit() {
 	     QPSX_MIPS_PERSISTENT_RETURN_RA);
 	xlog("QPSX: fold=%d/%d/%d profiler=%d telemetry=%d raw_vram=%d gpu_fixed=%d "
 	     "gpu_light_fast=%d gpu_linear4=%d gpu_tile32=%d gpu_sprite4=%d "
-	     "gpu_poly32=%d gpu_gflatv=%d gpu_hot_order=%d gpu_metrics=%d gpu_recip=%d "
+	     "gpu_poly32=%d gpu_gflatv=%d gpu_fullmask=%d gpu_hot_order=%d gpu_metrics=%d gpu_recip=%d "
 	     "mirror=%d fast_mem=%d",
 	     QPSX_MIPS_FOLD_DIRECT_JUMPS,
 	     QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX, QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES,
@@ -199,6 +205,7 @@ int psxInit() {
 	     QPSX_GPU_PACKED_TILE_WRITES, QPSX_GPU_PACKED_SPRITE_4BPP,
 	     QPSX_GPU_PACKED_POLY_WRITES,
 	     QPSX_GPU_4BPP_GOURAUD_FLATV,
+	     QPSX_GPU_4BPP_FULLMASK,
 	     QPSX_GPU_HOT_DRIVER_ORDER,
 	     QPSX_GPU_RUNTIME_METRICS, QPSX_GPU_RECIP_TABLE_BITS,
 	     QPSX_MIPS_VIRTUAL_MIRRORING,
@@ -210,10 +217,11 @@ int psxInit() {
 	     QPSX_HLE_LAZY_EVENT_CHECK);
 	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d",
 	     QPSX_GPU_GOURAUD_LINE_FLATFAST);
-	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d",
+	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d fullmask=%d fullmask_min=%d",
 	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
 	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,
-	     QPSX_GPU_4BPP_PALETTE_LUT);
+	     QPSX_GPU_4BPP_PALETTE_LUT, QPSX_GPU_4BPP_FULLMASK,
+	     QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS);
 
 #ifdef PSXREC
 	#ifndef interpreter_none

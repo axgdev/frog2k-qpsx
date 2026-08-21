@@ -79,6 +79,12 @@
 #ifndef QPSX_GPU_HOT_DRIVER_ORDER
 #define QPSX_GPU_HOT_DRIVER_ORDER 0
 #endif
+#ifndef QPSX_GPU_4BPP_FULLMASK
+#define QPSX_GPU_4BPP_FULLMASK 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS
+#define QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS 16
+#endif
 #ifndef QPSX_GPU_GOURAUD_LINE_FLATFAST
 #define QPSX_GPU_GOURAUD_LINE_FLATFAST 0
 #endif
@@ -321,6 +327,128 @@ qpsx_gpu_poly_span_4bpp_flatv_row(const gpu_unai_t &gpu_unai,
 	return true;
 }
 #undef QPSX_GPU_FLATV_ROW_NOINLINE
+#endif
+
+#if QPSX_GPU_4BPP_FULLMASK
+/* Full texture windows are common in the measured scene.  When the fixed
+ * point endpoints prove that neither coordinate wraps during a span, the
+ * two per-pixel texture-window masks are redundant.  Keep this helper
+ * out-of-line: the proof is cold, while the compact loop saves the masks and
+ * the V-row address calculation from every CF=32 pixel. */
+#if defined(__GNUC__)
+#define QPSX_GPU_FULLMASK_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_FULLMASK_NOINLINE
+#endif
+static QPSX_GPU_FULLMASK_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_fullmask(const gpu_unai_t &gpu_unai,
+					 u16 *pDst, u32 count)
+{
+	const u32 full_mask = ((255u << FIXED_BITS) | fixed_LOMASK);
+	const u32 u_inc = (u32)gpu_unai.u_inc;
+	const u32 v_inc = (u32)gpu_unai.v_inc;
+	u32 l_u;
+	u32 l_v;
+
+	if (!count || gpu_unai.u_msk != full_mask ||
+		gpu_unai.v_msk != full_mask)
+		return false;
+	l_u = gpu_unai.u & full_mask;
+	l_v = gpu_unai.v & full_mask;
+	const bool flat_unit_u = (v_inc == 0 && u_inc == (1u << FIXED_BITS));
+	if (flat_unit_u) {
+		const u32 texel = l_u >> FIXED_BITS;
+		if (texel >= 256u || count > 256u - texel)
+			return false;
+	} else if (count > 1) {
+		const u32 steps = count - 1u;
+		const s32 inc_u = (s32)u_inc;
+		const s32 inc_v = (s32)v_inc;
+		/* Compare the positive travel distance against the available
+		 * endpoint room.  Unsigned products let MIPS use one 32x32
+		 * multu per coordinate instead of the signed 64-bit endpoint
+		 * arithmetic that this cold proof used originally. */
+		if (inc_u > 0) {
+			const uint64_t distance = (uint64_t)(u32)inc_u * steps;
+			if (distance > (uint64_t)(full_mask - l_u))
+				return false;
+		} else if (inc_u < 0) {
+			const uint64_t distance = (uint64_t)(0u - u_inc) * steps;
+			if (distance > (uint64_t)l_u)
+				return false;
+		}
+		if (inc_v > 0) {
+			const uint64_t distance = (uint64_t)(u32)inc_v * steps;
+			if (distance > (uint64_t)(full_mask - l_v))
+				return false;
+		} else if (inc_v < 0) {
+			const uint64_t distance = (uint64_t)(0u - v_inc) * steps;
+			if (distance > (uint64_t)l_v)
+				return false;
+		}
+	}
+
+	const u8 *texture = (const u8 *)gpu_unai.TBA;
+	const u16 *cba = gpu_unai.CBA;
+	/* Flat-V/unit-U spans are the best case: one texture row and two texels
+	 * arrive in each source byte.  This is kept inside the out-of-line helper
+	 * so the normal CF=32 driver does not grow on the target's tiny I-cache. */
+	if (flat_unit_u) {
+		const u32 tu = l_u >> FIXED_BITS;
+		const u8 *packed_row = texture + ((l_v >> FIXED_BITS) << 11) + (tu >> 1);
+		if (tu & 1u) {
+			const u16 src = cba[*packed_row >> 4];
+			if (src)
+				*pDst = src;
+			++pDst;
+			++packed_row;
+			--count;
+		}
+		while (count >= 2) {
+			const u8 packed = *packed_row++;
+			const u16 src0 = cba[packed & 0xfu];
+			const u16 src1 = cba[packed >> 4];
+			if (src0)
+				pDst[0] = src0;
+			if (src1)
+				pDst[1] = src1;
+			pDst += 2;
+			count -= 2;
+		}
+		if (count) {
+			const u16 src = cba[*packed_row & 0xfu];
+			if (src)
+				*pDst = src;
+		}
+		return true;
+	}
+	if (v_inc == 0) {
+		const u8 *row = texture + ((l_v >> FIXED_BITS) << 11);
+		do {
+			const u32 tu = l_u >> FIXED_BITS;
+			const u8 packed = row[tu >> 1];
+			const u16 src = cba[(packed >> ((tu & 1u) << 2)) & 0xfu];
+			if (src)
+				*pDst = src;
+			++pDst;
+			l_u += u_inc;
+		} while (--count);
+		return true;
+	}
+	do {
+		const u32 tu = l_u >> FIXED_BITS;
+		const u32 tv = l_v >> FIXED_BITS;
+		const u8 packed = texture[(tv << 11) + (tu >> 1)];
+		const u16 src = cba[(packed >> ((tu & 1u) << 2)) & 0xfu];
+		if (src)
+			*pDst = src;
+		++pDst;
+		l_u += u_inc;
+		l_v += v_inc;
+	} while (--count);
+	return true;
+}
+#undef QPSX_GPU_FULLMASK_NOINLINE
 #endif
 
 #ifdef __arm__
@@ -1099,6 +1227,13 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 #endif
 #if QPSX_GPU_LINEAR_4BPP
 	if (CF == 32 && qpsx_gpu_poly_span_4bpp_linear(gpu_unai, pDst, count))
+		return;
+#endif
+#if QPSX_GPU_4BPP_FULLMASK
+	if (CF == 32 && count >= QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS &&
+		gpu_unai.u_msk == ((255u << FIXED_BITS) | fixed_LOMASK) &&
+		gpu_unai.v_msk == ((255u << FIXED_BITS) | fixed_LOMASK) &&
+		qpsx_gpu_poly_span_4bpp_fullmask(gpu_unai, pDst, count))
 		return;
 #endif
 #if QPSX_GPU_4BPP_GOURAUD_FLATV
