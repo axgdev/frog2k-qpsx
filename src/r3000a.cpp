@@ -158,6 +158,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_DMA_CHAIN_FAST
 #define QPSX_GPU_DMA_CHAIN_FAST 0
 #endif
+#ifndef QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK 0
+#endif
 #ifndef QPSX_HOT_LAYOUT
 #define QPSX_HOT_LAYOUT 0
 #endif
@@ -247,7 +250,9 @@ int psxInit() {
 	     QPSX_GPU_DIRECT_PACKET);
 	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d poly2043_fast=%d",
 	     QPSX_GPU_GOURAUD_LINE_FLATFAST, QPSX_GPU_POLY_2043_FAST);
-	xlog("QPSX: gpu_dma_opts chain_fast=%d", QPSX_GPU_DMA_CHAIN_FAST);
+	xlog("QPSX: gpu_dma_opts chain_fast=%d adaptive_min_prev_work=%d",
+	     QPSX_GPU_DMA_CHAIN_FAST,
+	     QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK);
 	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d gcache=%d fullmask=%d fullmask_min=%d pack4=%d hot_layout=%d phase_metrics=%d",
 	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
 	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,

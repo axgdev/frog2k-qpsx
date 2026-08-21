@@ -41,6 +41,10 @@ QPSX_GPU_POLY_2043_FAST ?= 0
 # defer status/dirty publication until the chain boundary.  The default keeps
 # the established per-node path byte-for-byte in the generated code.
 QPSX_GPU_DMA_CHAIN_FAST ?= 0
+# Minimum prior-chain GPU-DMA work before the out-of-line deferred-chain
+# walker is entered. Work is the existing GPU_dmaChain cpu_cycles estimate;
+# zero keeps the historical walker byte-for-byte gated off.
+QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK ?= 0
 QPSX_GE_RAW_VRAM ?= 0
 QPSX_GPU_RECIP_TABLE_BITS ?= 0
 QPSX_GPU_4BPP_FULLMASK ?= 0
@@ -80,6 +84,7 @@ QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_GPU_GOURAUD_LINE_FLATFAST=$(QPSX_GPU_GOURAUD_LINE_FLATFAST) \
 	-DQPSX_GPU_POLY_2043_FAST=$(QPSX_GPU_POLY_2043_FAST) \
 	-DQPSX_GPU_DMA_CHAIN_FAST=$(QPSX_GPU_DMA_CHAIN_FAST) \
+	-DQPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK) \
 	-DQPSX_GE_RAW_VRAM=$(QPSX_GE_RAW_VRAM) \
 	-DQPSX_GPU_RECIP_TABLE_BITS=$(QPSX_GPU_RECIP_TABLE_BITS) \
 	-DQPSX_GPU_4BPP_FULLMASK=$(QPSX_GPU_4BPP_FULLMASK) \
@@ -205,6 +210,7 @@ $(QPSX_CONFIG_STAMP): qpsx-config-force
 		'QPSX_GPU_GOURAUD_LINE_FLATFAST=$(QPSX_GPU_GOURAUD_LINE_FLATFAST)' \
 		'QPSX_GPU_POLY_2043_FAST=$(QPSX_GPU_POLY_2043_FAST)' \
 		'QPSX_GPU_DMA_CHAIN_FAST=$(QPSX_GPU_DMA_CHAIN_FAST)' \
+		'QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK)' \
 		'QPSX_GE_RAW_VRAM=$(QPSX_GE_RAW_VRAM)' \
 		'QPSX_GPU_4BPP_FULLMASK=$(QPSX_GPU_4BPP_FULLMASK)' \
 		'QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS=$(QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS)' \
@@ -274,6 +280,12 @@ src/gpu/$(GPU)/gpulib_if.o: src/gpu/$(GPU)/gpu_poly2043_fast.h
 ifeq ($(QPSX_GPU_DMA_CHAIN_FAST),1)
 OBJS += src/gpu/gpulib/gpu_dma_chain_finish.o
 src/gpu/gpulib/gpu_dma_chain_finish.o: src/gpu/gpulib/gpu_dma_chain_fast.h
+endif
+ifneq ($(filter-out 0,$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK)),)
+OBJS += src/gpu/gpulib/gpu_dma_chain_adaptive.o
+src/gpu/gpulib/gpu_dma_chain_adaptive.o: \
+	src/gpu/gpulib/gpu_dma_chain_adaptive.h \
+	src/gpu/gpulib/gpu.h
 endif
 
 # QPSX v091: MIPS32 Assembly optimizations (SF2000 bare-metal only)

@@ -20,9 +20,25 @@
 #ifndef QPSX_GPU_DMA_CHAIN_FAST
 #define QPSX_GPU_DMA_CHAIN_FAST 0
 #endif
+#ifndef QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK 0
+#endif
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_ENABLED 1
+#else
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_ENABLED 0
+#endif
+#if QPSX_GPU_DMA_CHAIN_FAST && QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#error "QPSX_GPU_DMA_CHAIN_FAST cannot be combined with adaptive DMA"
+#endif
 #if QPSX_GPU_DMA_CHAIN_FAST
 #include "gpu_dma_chain_fast.h"
 #endif
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_ENABLED
+#include "gpu_dma_chain_adaptive.h"
+#endif
+#include "qpsx_phase_metrics.h"
+
 /* SF2000 xlog debugging */
 #ifdef SF2000
 extern "C" {
@@ -700,11 +716,31 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
   int chain_dirty = 0;
   uint32_t chain_old_e3;
 #endif
+#if QPSX_PHASE_METRICS
+  unsigned dma_nodes = 0;
+  unsigned dma_nonempty = 0;
+  unsigned dma_words = 0;
+  unsigned dma_eligible = 0;
+  unsigned dma_batched = 0;
+  unsigned dma_fallback = 0;
+#endif
 
   preload(rambase + (start_addr & 0x1fffff) / 4);
 
   if (unlikely(gpu.cmd_len > 0))
     flush_cmd_buffer();
+
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+  /* The last-list record is written by the historical walker already.  Use a
+   * recent heavy chain as the predictor without adding a frame accumulator or
+   * a new per-chain store to this path. */
+  if (qpsx_gpu_dma_chain_adaptive_prev_ready(
+        gpu.state.last_list.frame, *gpu.state.frame_count,
+        gpu.state.last_list.cycles,
+        (unsigned)QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK,
+        gpu.frameskip.active, gpu.dma.h))
+    return qpsx_gpu_adaptive_dma_chain(rambase, start_addr);
+#endif
 
 #if QPSX_GPU_DMA_CHAIN_FAST
   /* A pending command-buffer tail, frameskip, or an already active image
@@ -728,6 +764,12 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
     list = rambase + (addr & 0x1fffff) / 4;
     len = list[0] >> 24;
     addr = list[0] & 0xffffff;
+#if QPSX_PHASE_METRICS
+    dma_nodes++;
+    if (len)
+      dma_nonempty++;
+    dma_words += (unsigned)len;
+#endif
     preload(rambase + (addr & 0x1fffff) / 4);
 
     cpu_cycles += 10;
@@ -758,9 +800,9 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
       } else
 #endif
       {
-      left = do_cmd_buffer(list + 1, len);
-      if (left)
-        log_anomaly("GPUdmaChain: discarded %d/%d words\n", left, len);
+        left = do_cmd_buffer(list + 1, len);
+        if (left)
+          log_anomaly("GPUdmaChain: discarded %d/%d words\n", left, len);
       }
     }
 
@@ -798,13 +840,42 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
   }
 #endif
 
+#if QPSX_PHASE_METRICS
+  QPSX_PHASE_DMA(dma_nodes, dma_nonempty, dma_words, (unsigned)cpu_cycles,
+                 dma_eligible, dma_batched, dma_fallback);
+#endif
+
   gpu.state.last_list.frame = *gpu.state.frame_count;
   gpu.state.last_list.hcnt = *gpu.state.hcnt;
   gpu.state.last_list.cycles = cpu_cycles;
   gpu.state.last_list.addr = start_addr;
-
   return cpu_cycles;
 }
+
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+/* Keep only transfer operations reachable from the cold deferred parser out
+ * of the legacy gpu.o parser loop.  Legacy node processing calls remain the
+ * original do_cmd_buffer call directly in GPU_dmaChain. */
+noinline int qpsx_gpu_adaptive_do_vram_io(uint32_t *data, int count,
+                                          int is_read)
+{
+  return do_vram_io(data, count, is_read);
+}
+
+noinline void qpsx_gpu_adaptive_start_vram_transfer(uint32_t pos_word,
+                                                    uint32_t size_word,
+                                                    int is_read)
+{
+  start_vram_transfer(pos_word, size_word, is_read);
+}
+
+/* Only the cold/error arm of the out-of-line walker reaches this bridge.
+ * Ordinary predicted-light frames retain the direct historical call. */
+noinline int qpsx_gpu_adaptive_legacy_cmd_buffer(uint32_t *data, int count)
+{
+  return do_cmd_buffer(data, count);
+}
+#endif
 
 void GPU_readDataMem(uint32_t *mem, int count)
 {

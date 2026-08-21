@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../src/gpu/gpulib/gpu_dma_chain_fast.h"
+#include "../src/gpu/gpulib/gpu_dma_chain_adaptive.h"
 
 enum NodeKind {
   NODE_EMPTY,
@@ -244,6 +245,45 @@ static int compare_case(const char *name, State s, const Node *nodes,
   return 0;
 }
 
+/* The production entry gate uses gpu.state.last_list directly.  Keep this
+ * test focused on that exact inline predicate: no frame accumulator exists
+ * in the performance path, so stale or same-frame records are the only
+ * predictor state that can affect dispatch.  Parser/state equivalence and
+ * irreversible fallback are covered by the state-machine cases above. */
+static int check_previous_chain_gate(void)
+{
+  const unsigned thresholds[] = { 2048, 4096, 8192 };
+  size_t i;
+
+  for (i = 0; i < sizeof(thresholds) / sizeof(thresholds[0]); ++i) {
+    unsigned threshold = thresholds[i];
+    if (qpsx_gpu_dma_chain_adaptive_prev_ready(8, 10, threshold, threshold,
+                                               0, 0))
+      return 1; /* a record older than one frame is stale */
+    if (qpsx_gpu_dma_chain_adaptive_prev_ready(9, 10, threshold - 1,
+                                               threshold, 0, 0))
+      return 1; /* exact threshold is inclusive, but threshold-1 is not */
+    if (!qpsx_gpu_dma_chain_adaptive_prev_ready(9, 10, threshold, threshold,
+                                                0, 0))
+      return 1; /* immediately preceding frame, heavy chain */
+    if (!qpsx_gpu_dma_chain_adaptive_prev_ready(10, 10, threshold, threshold,
+                                                0, 0))
+      return 1; /* same-frame subsequent chain is also usable */
+    if (qpsx_gpu_dma_chain_adaptive_prev_ready(9, 10, threshold, threshold,
+                                               1, 0) ||
+        qpsx_gpu_dma_chain_adaptive_prev_ready(9, 10, threshold, threshold,
+                                               0, 1))
+      return 1; /* unsafe entry must stay on legacy traversal */
+  }
+
+  /* Frame zero has no representable preceding frame.  A same-frame record is
+   * valid, while UINT_MAX must not wrap into frame zero. */
+  if (qpsx_gpu_dma_chain_adaptive_prev_ready(~0u, 0, 4096, 4096, 0, 0) ||
+      !qpsx_gpu_dma_chain_adaptive_prev_ready(0, 0, 4096, 4096, 0, 0))
+    return 1;
+  return 0;
+}
+
 int main(void)
 {
   static const Node ordinary[] = {
@@ -309,6 +349,20 @@ int main(void)
                              cases[i].count, cases[i].expect_fast);
   }
 
+  /* The production walker changes loop-marker behaviour at 8K entries.  Keep
+   * the legacy and deferred orchestration models compared on both sides of
+   * that boundary. */
+  {
+    static Node boundary_nodes[8193];
+    const size_t boundary_counts[] = { 8191, 8192, 8193 };
+    size_t b, n;
+    for (n = 0; n < sizeof(boundary_nodes) / sizeof(boundary_nodes[0]); ++n)
+      boundary_nodes[n] = (Node){ NODE_NORMAL, 0, 0, 0, 1 };
+    for (b = 0; b < sizeof(boundary_counts) / sizeof(boundary_counts[0]); ++b)
+      failures += compare_case("loop-marker-boundary", initial_state(),
+                               boundary_nodes, boundary_counts[b], 1);
+  }
+
   /* Verify the exact unsigned edge behaviour independently at both display
    * boundaries, including the interlace override. */
   {
@@ -335,8 +389,13 @@ int main(void)
     }
   }
 
+  if (check_previous_chain_gate()) {
+    fprintf(stderr, "previous-chain predictor gate boundary failure\n");
+    failures++;
+  }
+
   if (failures)
     return 1;
-  puts("gpu_dma_chain_fast_diff: PASS (state, fallback, transfer, and boundary cases)");
+  puts("gpu_dma_chain_fast_diff: PASS (state, fallback, transfer, boundary, and previous-chain gate cases)");
   return 0;
 }
