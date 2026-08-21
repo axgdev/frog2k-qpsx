@@ -133,17 +133,23 @@ psxRegisters psxRegs;
 
 int psxInit() {
 	printf("Running PCSX Version %s (%s).\n", PACKAGE_VERSION, __DATE__);
-	xlog("QPSX: build_id=%s dispatch_cache=%d dispatch_gp=%d dispatch_gp_abi=%d dispatch_bl=%d dispatch_frame_bl=%d psxM_reg=%d gte_native_div=%d "
-	     "gte_hot_o3=%d return_ra=%d fold=%d/%d/%d profiler=%d telemetry=%d "
-	     "gpu_fixed=%d gpu_light_fast=%d gpu_linear4=%d gpu_tile32=%d "
-	     "gpu_sprite4=%d gpu_hot_order=%d gpu_metrics=%d mirror=%d fast_mem=%d",
+	/* Keep each fingerprint record below qpsx_adapter's 320-byte kmsg
+	 * buffer. Losing the complete line makes physical A/B logs ambiguous,
+	 * especially when a long build tag is used. */
+	xlog("QPSX: build_id=%s dispatch_cache=%d dispatch_gp=%d dispatch_gp_abi=%d "
+	     "dispatch_bl=%d dispatch_frame_bl=%d psxM_reg=%d gte_native_div=%d "
+	     "gte_hot_o3=%d return_ra=%d",
 	     QPSX_BUILD_TAG, QPSX_MIPS_DISPATCH_CACHE_ENTRIES, QPSX_MIPS_DISPATCH_CACHE_GP,
 	     QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI,
 	     QPSX_MIPS_DISPATCH_BRANCH_LIKELY,
 	     QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY,
 	     QPSX_MIPS_PSMEM_REG,
 	     QPSX_GTE_NATIVE_DIVIDE, QPSX_GTE_HOT_O3,
-	     QPSX_MIPS_PERSISTENT_RETURN_RA, QPSX_MIPS_FOLD_DIRECT_JUMPS,
+	     QPSX_MIPS_PERSISTENT_RETURN_RA);
+	xlog("QPSX: fold=%d/%d/%d profiler=%d telemetry=%d gpu_fixed=%d "
+	     "gpu_light_fast=%d gpu_linear4=%d gpu_tile32=%d gpu_sprite4=%d "
+	     "gpu_hot_order=%d gpu_metrics=%d mirror=%d fast_mem=%d",
+	     QPSX_MIPS_FOLD_DIRECT_JUMPS,
 	     QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX, QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES,
 	     QPSX_PROFILER_ENABLED, QPSX_RUNTIME_TELEMETRY,
 	     QPSX_GPU_FIXED_FAST_PATH, QPSX_GPU_FIXED_LIGHTING,
