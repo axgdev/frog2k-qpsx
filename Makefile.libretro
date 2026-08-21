@@ -29,6 +29,11 @@ QPSX_OPTIMIZE ?= -O2
 # this empty by default: the recompiler, GTE, memory and audio code are much
 # more sensitive to -O2 scheduling than the large generated GPU driver.
 QPSX_GPU_OPTIMIZE ?=
+# The SPU mixer is a large, frequently entered routine on the single-core
+# target.  Keep this separate from the renderer knob so a size-vs-schedule
+# A/B can be measured without changing GPU code or audio behavior.  Empty is
+# the established optimization level; -Os is an opt-in cache-footprint test.
+QPSX_SPU_OPTIMIZE ?=
 # Bypass the dynamic RAM LUT in the C helper for PS1's 8 MiB mirrored window.
 # Leave this an explicit A/B knob because the extra range check also enlarges
 # the helper text in the tiny target I-cache.
@@ -352,7 +357,7 @@ clean:
 
 # Compilation rules
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(if $(filter src/spu/$(SPU)/spu.o,$@),$(QPSX_SPU_OPTIMIZE),) -c $< -o $@
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(if $(filter $@,$(QPSX_GPU_OBJECTS)),$(QPSX_GPU_OPTIMIZE),) -c $< -o $@
