@@ -8,11 +8,11 @@
  *
  * The caller selects this routine only for the explicit SF2000 A/B build.
  * It implements the normal PS1 fixed-point envelope, uses the MIPS32 HI/LO
- * multiply accumulator, and makes no C calls.  Visible IR, depth, projection
- * and IR0 results are saturated with the same integer bounds as the C path,
- * so an outlier cannot wrap into a bogus polygon.  It returns 1 after
- * committing all results; the C wrapper retains a zero-return escape hatch
- * for future hardware-specific guard experiments.
+ * multiply accumulator, and makes no C calls on the common path.  It checks
+ * every signed-32, IR, depth, projection, divide and IR0 envelope before
+ * exposing an exceptional result.  Any outlier returns 0 after restoring
+ * callee state; the C wrapper then reruns the exact PS1 saturation/overflow
+ * implementation.
  ***************************************************************************/
 
 .set noreorder
@@ -116,26 +116,21 @@ gte_RTPT_asm:
     madd    $s2, $a2
     mflo    $v0
     mfhi    $v1
+    sra     $a3, $v1, 12              /* A1: signed 64->32 overflow guard */
     srl     $v0, $v0, 12
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
     sw      $v0, OFF_MAC1($t0)
-    /* limB1: saturate IR1 instead of wrapping it.  The MAC register keeps
-     * the unsaturated result, as on the GTE. */
+    /* limB1: reject an IR1 saturation and let the exact C path set FLAG. */
     sll     $v1, $v0, 16
     sra     $v1, $v1, 16
     beq     $v1, $v0, 9f
     sh      $v0, OFF_IR1($t0)            /* common case: fill the delay slot */
-    slt     $v1, $v0, $zero
-    bne     $v1, $zero, 8f
+    b       RTPT_FAIL
     nop
-    li      $v0, 32767
-    b       7f
-    nop
-8:
-    li      $v0, -32768
-7:
-    sh      $v0, OFF_IR1($t0)
 9:
 
     /* MAC2 = TRY + (R21*vx + R22*vy + R23*vz) / 4096. */
@@ -148,25 +143,21 @@ gte_RTPT_asm:
     madd    $s5, $a2
     mflo    $v0
     mfhi    $v1
+    sra     $a3, $v1, 12              /* A2: signed 64->32 overflow guard */
     srl     $v0, $v0, 12
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
     sw      $v0, OFF_MAC2($t0)
-    /* limB2: saturate IR2. */
+    /* limB2: reject an IR2 saturation and let the exact C path set FLAG. */
     sll     $v1, $v0, 16
     sra     $v1, $v1, 16
     beq     $v1, $v0, 9f
     sh      $v0, OFF_IR2($t0)            /* common case: fill the delay slot */
-    slt     $v1, $v0, $zero
-    bne     $v1, $zero, 8f
+    b       RTPT_FAIL
     nop
-    li      $v0, 32767
-    b       7f
-    nop
-8:
-    li      $v0, -32768
-7:
-    sh      $v0, OFF_IR2($t0)
 9:
 
     /* MAC3/depth = TRZ + (R31*vx + R32*vy + R33*vz) / 4096. */
@@ -179,38 +170,28 @@ gte_RTPT_asm:
     madd    $t9, $a2
     mflo    $v0
     mfhi    $v1
+    sra     $a3, $v1, 12              /* A3: signed 64->32 overflow guard */
     srl     $v0, $v0, 12
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
     sw      $v0, OFF_MAC3($t0)
-    /* limB3: saturate IR3. */
+    /* limB3: reject an IR3 saturation and let the exact C path set FLAG. */
     sll     $v1, $v0, 16
     sra     $v1, $v1, 16
     beq     $v1, $v0, 9f
     sh      $v0, OFF_IR3($t0)            /* common case: fill the delay slot */
-    slt     $v1, $v0, $zero
-    bne     $v1, $zero, 8f
+    b       RTPT_FAIL
     nop
-    li      $v0, 32767
-    b       7f
-    nop
-8:
-    li      $v0, -32768
-7:
-    sh      $v0, OFF_IR3($t0)
 9:
-    /* limD: depth is an unsigned 16-bit saturated value. */
+    /* limD: reject an unsigned 16-bit depth saturation. */
     srl     $v1, $v0, 16
     beq     $v1, $zero, 6f
     nop
-    slt     $v1, $v0, $zero
-    bne     $v1, $zero, 7f
+    b       RTPT_FAIL
     nop
-    li      $v0, 65535
-    b       6f
-    nop
-7:
-    move    $v0, $zero
 6:
     sh      $v0, \SZOFF($t0)
 
@@ -218,7 +199,8 @@ gte_RTPT_asm:
      * `divu rd,rs,rt` pseudo emits a software BREAK on a zero denominator
      * (and an unnecessary MFLO into rd).  A clipped zero-depth vertex is
      * legal in the PS1 scene stream, so use the real three-operand encoding
-     * and take the same capped quotient used by limE instead of trapping. */
+     * and fall back to the exact C path for the capped/zero case instead of
+     * trapping or silently dropping the divide-overflow flag. */
     /* SZ is the clamped low half of MAC3 in the common positive-depth
      * envelope.  Reusing V0 avoids a dependent D-cache load per vertex. */
     andi    $a3, $v0, 0xffff
@@ -226,19 +208,16 @@ gte_RTPT_asm:
     /* DIVIDE returns 0xffffffff (then limE caps to 0x1ffff) whenever
      * H >= 2*SZ.  Preserve that behavior instead of producing an enormous
      * quotient that wraps screen coordinates. */
-    beq     $a3, $zero, 3f
+    beq     $a3, $zero, RTPT_FAIL
     nop
     sll     $v1, $a3, 1
     sltu    $v1, $t4, $v1
-    beq     $v1, $zero, 3f
+    beq     $v1, $zero, RTPT_FAIL
     nop
     .word   0x0047001b                   /* divu $zero,$v0,$a3 */
     mflo    $a2                         /* quotient, retained for Y/IR0 */
     b       4f
     nop
-3:
-    lui     $a2, 2                       /* limE(0xffffffff) = 0x1ffff */
-    addiu   $a2, $a2, -1
 4:
     lh      $a0, OFF_IR1($t0)
     lh      $a1, OFF_IR2($t0)
@@ -255,21 +234,13 @@ gte_RTPT_asm:
     srl     $v0, $v0, 16
     sll     $v1, $v1, 16
     addu    $v0, $v0, $v1
-    /* limG1: saturate screen X to the signed 11-bit range. */
+    /* limG1: reject screen-X clipping and let C preserve its FLAG bit. */
     addiu   $a3, $v0, 1024
     sltiu   $v1, $a3, 2048
     bne     $v1, $zero, 5f
     sh      $v0, \SXYOFF($t0)             /* common case: fill the delay slot */
-    slt     $v1, $v0, $zero
-    bne     $v1, $zero, 4f
+    b       RTPT_FAIL
     nop
-    li      $v0, 1023
-    b       6f
-    nop
-4:
-    li      $v0, -1024
-6:
-    sh      $v0, \SXYOFF($t0)
 5:
 
     /* SY = (OFY + IR2*quotient) >> 16. */
@@ -284,21 +255,13 @@ gte_RTPT_asm:
     srl     $v0, $v0, 16
     sll     $v1, $v1, 16
     addu    $v0, $v0, $v1
-    /* limG2: saturate screen Y to the signed 11-bit range. */
+    /* limG2: reject screen-Y clipping and let C preserve its FLAG bit. */
     addiu   $a3, $v0, 1024
     sltiu   $v1, $a3, 2048
     bne     $v1, $zero, 5f
     sh      $v0, \SXYOFF+2($t0)           /* common case: fill the delay slot */
-    slt     $v1, $v0, $zero
-    bne     $v1, $zero, 4f
+    b       RTPT_FAIL
     nop
-    li      $v0, 1023
-    b       6f
-    nop
-4:
-    li      $v0, -1024
-6:
-    sh      $v0, \SXYOFF+2($t0)
 5:
 .endm
 
@@ -315,24 +278,20 @@ gte_RTPT_asm:
     addu    $v0, $v0, $t8
     sltu    $a3, $v0, $t8
     addu    $v1, $v1, $a3
+    sra     $a0, $v1, 12              /* F: preserve MAC0 overflow flags */
     sw      $v0, OFF_MAC0($t0)
     srl     $v0, $v0, 12
     sll     $v1, $v1, 20
     addu    $v0, $v0, $v1
-    /* limH: saturate IR0 to [0, 0x1000]. */
+    sra     $v1, $v0, 31
+    bne     $a0, $v1, RTPT_FAIL
+    nop
+    /* limH: reject IR0 clipping and let the exact C path set FLAG. */
     sltiu   $v1, $v0, 4097
     bne     $v1, $zero, 2f
     sh      $v0, OFF_IR0($t0)             /* common case: fill the delay slot */
-    slt     $v1, $v0, $zero
-    bne     $v1, $zero, 1f
+    b       RTPT_FAIL
     nop
-    li      $v0, 4096
-    b       3f
-    nop
-1:
-    move    $v0, $zero
-3:
-    sh      $v0, OFF_IR0($t0)
 2:
 
     lw      $s0, 0($sp)
