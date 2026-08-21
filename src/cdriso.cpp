@@ -50,6 +50,10 @@
 #include <zlib.h>
 #endif
 
+#ifdef SF2000
+extern "C" void xlog(const char *fmt, ...);
+#endif
+
 #define OFF_T_MSB ((off_t)1 << (sizeof(off_t) * 8 - 1))
 
 /* v367b: Compressed CDDA support HARDCODED ON */
@@ -203,6 +207,158 @@ static boolean multifile = FALSE;
 
 static unsigned char cdbuffer[CD_FRAMESIZE_RAW];
 static unsigned char subbuffer[SUB_FRAMESIZE];
+
+/*
+ * The SF2000 has a 16 KiB D-cache and a slow SD-backed filesystem.  A normal
+ * PSX data request is one 2352-byte sector, which used to perform a seek and
+ * fread for every sector even when the guest was reading a sequential run.
+ * Keep only four sectors here: the 9408-byte data window fits below one
+ * D-cache, and a miss turns four filesystem operations into one without
+ * competing with the emulator's larger hot buffers.  The cache is also used
+ * for 2048-byte mode-1 images; the stride is part of the key so the two
+ * layouts can never alias.
+ */
+#ifndef QPSX_CD_READ_CACHE_SECTORS
+#define QPSX_CD_READ_CACHE_SECTORS 4
+#endif
+#define QPSX_CD_READ_CACHE_BYTES \
+	(QPSX_CD_READ_CACHE_SECTORS * CD_FRAMESIZE_RAW)
+
+/* Small images fit comfortably in the SF2000's free RAM.  Preload those
+ * once at CDR_open() so their later sector reads do not touch the SD card at
+ * all.  Larger images keep the small cache above; forcing a multi-megabyte
+ * read at an arbitrary seek would be slower than the bounded fallback. */
+#ifndef QPSX_CD_PRELOAD_MB
+#define QPSX_CD_PRELOAD_MB 16
+#endif
+#define QPSX_CD_PRELOAD_BYTES \
+	((size_t)QPSX_CD_PRELOAD_MB * 1024u * 1024u)
+
+static unsigned char cdread_cache[QPSX_CD_READ_CACHE_BYTES]
+	__attribute__((aligned(16)));
+static FILE *cdread_cache_file;
+static unsigned int cdread_cache_base;
+static unsigned int cdread_cache_stride;
+static int cdread_cache_first;
+static int cdread_cache_count;
+static unsigned char *cdread_preload;
+static size_t cdread_preload_size;
+static FILE *cdread_preload_file;
+
+static void cdread_preload_log(size_t size)
+{
+#ifdef SF2000
+	xlog("QPSX: CD image RAM preload: %lu bytes\n", (unsigned long)size);
+#else
+	printf("CD image RAM preload: %lu bytes\n", (unsigned long)size);
+#endif
+}
+
+static void cdread_preload_free(void)
+{
+	free(cdread_preload);
+	cdread_preload = NULL;
+	cdread_preload_size = 0;
+	cdread_preload_file = NULL;
+}
+
+static void cdread_preload_try(FILE *f)
+{
+	off_t end;
+	size_t size;
+	unsigned char *buffer;
+
+	if (QPSX_CD_PRELOAD_BYTES == 0 || f == NULL)
+		return;
+	if (fseeko(f, 0, SEEK_END) != 0)
+		return;
+	end = ftello(f);
+	if (end <= 0 || (uintmax_t)end > QPSX_CD_PRELOAD_BYTES) {
+		(void)fseeko(f, 0, SEEK_SET);
+		return;
+	}
+	size = (size_t)end;
+	buffer = (unsigned char *)malloc(size);
+	if (buffer == NULL) {
+		(void)fseeko(f, 0, SEEK_SET);
+		return;
+	}
+	if (fseeko(f, 0, SEEK_SET) != 0 || fread(buffer, 1, size, f) != size) {
+		free(buffer);
+		(void)fseeko(f, 0, SEEK_SET);
+		return;
+	}
+	cdread_preload = buffer;
+	cdread_preload_size = size;
+	cdread_preload_file = f;
+	cdread_preload_log(size);
+	(void)fseeko(f, 0, SEEK_SET);
+}
+
+static int cdread_preloaded(FILE *f, unsigned int base, void *dest,
+	unsigned int stride, int sector)
+{
+	size_t offset;
+
+	if (cdread_preload_file != f || sector < 0 || stride == 0)
+		return -1;
+	offset = (size_t)base + (size_t)(unsigned int)sector * stride;
+	if (offset > cdread_preload_size || stride > cdread_preload_size - offset)
+		return -1;
+	memcpy(dest, cdread_preload + offset, stride);
+	return (int)stride;
+}
+
+static void cdread_cache_invalidate(void)
+{
+	cdread_preload_free();
+	cdread_cache_file = NULL;
+	cdread_cache_base = 0;
+	cdread_cache_stride = 0;
+	cdread_cache_first = 0;
+	cdread_cache_count = 0;
+}
+
+static int cdread_cached(FILE *f, unsigned int base, void *dest,
+	unsigned int stride, int sector)
+{
+	int first;
+	size_t want;
+	size_t got;
+	int count;
+
+	if (sector < 0 || stride == 0 || stride > CD_FRAMESIZE_RAW)
+		return -1;
+	if (cdread_preloaded(f, base, dest, stride, sector) >= 0)
+		return (int)stride;
+
+	first = (sector / QPSX_CD_READ_CACHE_SECTORS) * QPSX_CD_READ_CACHE_SECTORS;
+	if (cdread_cache_file != f || cdread_cache_base != base ||
+		cdread_cache_stride != stride || sector < cdread_cache_first ||
+		sector >= cdread_cache_first + cdread_cache_count) {
+		want = (size_t)QPSX_CD_READ_CACHE_SECTORS * stride;
+		if (fseek(f, base + (unsigned int)first * stride, SEEK_SET) == -1) {
+			cdread_cache_invalidate();
+			return -1;
+		}
+
+		got = fread(cdread_cache, 1, want, f);
+		count = (int)(got / stride);
+		cdread_cache_file = f;
+		cdread_cache_base = base;
+		cdread_cache_stride = stride;
+		cdread_cache_first = first;
+		cdread_cache_count = count;
+	}
+
+	if (sector < cdread_cache_first ||
+		sector >= cdread_cache_first + cdread_cache_count)
+		return 0;
+
+	memcpy(dest, cdread_cache +
+		(size_t)(sector - cdread_cache_first) * stride, stride);
+	return (int)stride;
+}
 
 static unsigned char sndbuffer[CD_FRAMESIZE_RAW * 10];
 
@@ -1570,9 +1726,7 @@ static int opensbifile(const char *isoname) {
 
 static int cdread_normal(FILE *f, unsigned int base, void *dest, int sector)
 {
-	if (fseek(f, base + sector * CD_FRAMESIZE_RAW, SEEK_SET) == -1)
-		return -1;
-	return fread(dest, 1, CD_FRAMESIZE_RAW, f);
+	return cdread_cached(f, base, dest, CD_FRAMESIZE_RAW, sector);
 }
 
 static int cdread_sub_mixed(FILE *f, unsigned int base, void *dest, int sector)
@@ -1699,10 +1853,9 @@ static int cdread_2048(FILE *f, unsigned int base, void *dest, int sector)
 {
 	int ret;
 
-	if (fseek(f, base + sector * 2048, SEEK_SET) == -1)
-		return -1;
-
-	ret = fread((char *)dest + 12 * 2, 1, 2048, f);
+	ret = cdread_cached(f, base, (char *)dest + 12 * 2, 2048, sector);
+	if (ret < 0)
+		return ret;
 
 	// not really necessary, fake mode 2 header
 	memset(cdbuffer, 0, 12 * 2);
@@ -1745,6 +1898,7 @@ long CDR_open(void) {
 	if (cdHandle != NULL) {
 		return 0; // it's already open
 	}
+	cdread_cache_invalidate();
 
 	cdHandle = fopen(GetIsoFile(), "rb");
 	if (cdHandle == NULL) {
@@ -1877,6 +2031,9 @@ long CDR_open(void) {
 	/* v257: Try to upgrade CDDA tracks to compressed formats */
 	upgrade_cdda_formats();
 
+	if (cdimg_read_func == cdread_normal || cdimg_read_func == cdread_2048)
+		cdread_preload_try(cdHandle);
+
 	return 0;
 }
 
@@ -1916,6 +2073,7 @@ long CDR_close(void) {
 	UnloadSBI();
 	memset(cdbuffer, 0, sizeof(cdbuffer));
 	CDR_getBuffer = CDR_getBuffer_norm;
+	cdread_cache_invalidate();
 
 	return 0;
 }

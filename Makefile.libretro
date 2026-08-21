@@ -21,6 +21,10 @@ endif
 QPSX_PLATFORM_UNIFROG := $(if $(filter unifrog,$(QPSX_PLATFORM)),1,0)
 QPSX_PLATFORM_LINUX := $(if $(filter linux,$(QPSX_PLATFORM)),1,0)
 QPSX_ENABLE_MIPS32R2 ?= 0
+# Keep optimization selectable for the NOMMU target.  The HC15xx has only a
+# 16 KiB, 2-way I-cache; size-oriented builds can beat -O2 when the complete
+# GPU/recompiler text no longer fits in the hot instruction working set.
+QPSX_OPTIMIZE ?= -O2
 
 QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_PLATFORM_UNIFROG=$(QPSX_PLATFORM_UNIFROG) \
@@ -83,7 +87,7 @@ MORE_CFLAGS = -Os -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
 	-D$(shell echo $(GPU) | tr a-z A-Z) \
 	-D$(shell echo $(SPU) | tr a-z A-Z)
 else
-MORE_CFLAGS = -O2 -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
+MORE_CFLAGS = $(QPSX_OPTIMIZE) -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
 	-Isrc/plugin_lib \
 	-Isrc/port/$(PORT) \
 	-Ilibretro/core -Ilibretro/include \
