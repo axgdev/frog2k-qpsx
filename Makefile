@@ -42,11 +42,24 @@ all: $(TARGET)
 HOST_CXX ?= c++
 GPU_POLY2043_TEST = tests/gpu_poly2043_diff
 GPU_DMA_CHAIN_TEST = tests/gpu_dma_chain_fast_diff
+GTE_INTPL_TEST = tests/gte_intpl_diff
+
+# Build the real GTE translation unit for the host differential test.  The
+# source has many platform entry points, so function sections plus linker GC
+# retain only INTPL and avoid pulling the emulator's platform services into
+# this small test binary.  Defining __mips__ selects the same intentional
+# non-paranoid overflow policy used by the MIPS32 target; it does not make the
+# host compiler emit MIPS instructions.
+GTE_INTPL_TEST_CXXFLAGS = -std=c++11 -O2 -Wall -Wextra -Werror \
+	-ffunction-sections -fdata-sections -D__mips__ \
+	-DINLINE='static inline' -DQPSX_GTE_INTPL_OPTIMIZE=1 \
+	-DQPSX_PROFILER_ENABLED=0 -Isrc -Isrc/port/libretro
 
 .PHONY: check
-check: $(GPU_POLY2043_TEST) $(GPU_DMA_CHAIN_TEST)
+check: $(GPU_POLY2043_TEST) $(GPU_DMA_CHAIN_TEST) $(GTE_INTPL_TEST)
 	./$(GPU_POLY2043_TEST)
 	./$(GPU_DMA_CHAIN_TEST)
+	./$(GTE_INTPL_TEST)
 
 $(GPU_POLY2043_TEST): tests/gpu_poly2043_diff.cpp
 	$(HOST_CXX) -std=c++11 -O2 -Wall -Wextra -Werror $< -o $@
@@ -54,6 +67,15 @@ $(GPU_POLY2043_TEST): tests/gpu_poly2043_diff.cpp
 $(GPU_DMA_CHAIN_TEST): tests/gpu_dma_chain_fast_diff.cpp \
 		src/gpu/gpulib/gpu_dma_chain_fast.h
 	$(HOST_CXX) -std=c++11 -O2 -Wall -Wextra -Werror $< -o $@
+
+$(GTE_INTPL_TEST): tests/gte_intpl_diff.cpp src/gte.cpp src/gte.h \
+	src/r3000a.h src/psxcommon.h src/psxmem.h src/port/libretro/port.h \
+	src/profiler.h
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	$(HOST_CXX) $(GTE_INTPL_TEST_CXXFLAGS) -c src/gte.cpp -o "$$tmp/gte.o"; \
+	$(HOST_CXX) $(GTE_INTPL_TEST_CXXFLAGS) -c $< -o "$$tmp/test.o"; \
+	$(HOST_CXX) -Wl,--gc-sections "$$tmp/test.o" "$$tmp/gte.o" -o $@
 
 # Port selection - libretro (not SDL!)
 PORT = libretro

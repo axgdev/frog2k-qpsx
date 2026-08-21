@@ -1071,9 +1071,11 @@ static void gteINTPL_const(void) {
 #endif
 	gteFLAG = 0;
 
-	gteMAC1 = ((gteIR1 << 12) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift_const;
-	gteMAC2 = ((gteIR2 << 12) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift_const;
-	gteMAC3 = ((gteIR3 << 12) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift_const;
+	/* IR1..3 are signed 16-bit values.  Multiplication is defined for the
+	 * complete range and avoids left-shifting a negative signed int. */
+	gteMAC1 = ((gteIR1 * 4096) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift_const;
+	gteMAC2 = ((gteIR2 * 4096) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift_const;
+	gteMAC3 = ((gteIR3 * 4096) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift_const;
 	gteIR1 = limB1(gteMAC1, lm);
 	gteIR2 = limB2(gteMAC2, lm);
 	gteIR3 = limB3(gteMAC3, lm);
@@ -1106,9 +1108,9 @@ void gteINTPL(u32 gteop) {
 #endif
 	gteFLAG = 0;
 
-	gteMAC1 = ((gteIR1 << 12) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift;
-	gteMAC2 = ((gteIR2 << 12) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift;
-	gteMAC3 = ((gteIR3 << 12) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift;
+	gteMAC1 = ((gteIR1 * 4096) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift;
+	gteMAC2 = ((gteIR2 * 4096) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift;
+	gteMAC3 = ((gteIR3 * 4096) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift;
 	gteIR1 = limB1(gteMAC1, lm);
 	gteIR2 = limB2(gteMAC2, lm);
 	gteIR3 = limB3(gteMAC3, lm);

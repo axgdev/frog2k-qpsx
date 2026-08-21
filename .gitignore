@@ -20,3 +20,4 @@ Thumbs.db
 .qpsx-build-config
 /tests/gpu_poly2043_diff
 /tests/gpu_dma_chain_fast_diff
+/tests/gte_intpl_diff
