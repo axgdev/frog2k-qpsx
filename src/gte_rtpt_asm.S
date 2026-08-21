@@ -125,17 +125,18 @@ gte_RTPT_asm:
     sll     $v1, $v0, 16
     sra     $v1, $v1, 16
     beq     $v1, $v0, 9f
-    nop
+    sh      $v0, OFF_IR1($t0)            /* common case: fill the delay slot */
     slt     $v1, $v0, $zero
     bne     $v1, $zero, 8f
     nop
     li      $v0, 32767
-    b       9f
+    b       7f
     nop
 8:
     li      $v0, -32768
-9:
+7:
     sh      $v0, OFF_IR1($t0)
+9:
 
     /* MAC2 = TRY + (R21*vx + R22*vy + R23*vz) / 4096. */
     sll     $v0, $t2, 12
@@ -155,17 +156,18 @@ gte_RTPT_asm:
     sll     $v1, $v0, 16
     sra     $v1, $v1, 16
     beq     $v1, $v0, 9f
-    nop
+    sh      $v0, OFF_IR2($t0)            /* common case: fill the delay slot */
     slt     $v1, $v0, $zero
     bne     $v1, $zero, 8f
     nop
     li      $v0, 32767
-    b       9f
+    b       7f
     nop
 8:
     li      $v0, -32768
-9:
+7:
     sh      $v0, OFF_IR2($t0)
+9:
 
     /* MAC3/depth = TRZ + (R31*vx + R32*vy + R33*vz) / 4096. */
     sll     $v0, $t3, 12
@@ -185,25 +187,24 @@ gte_RTPT_asm:
     sll     $v1, $v0, 16
     sra     $v1, $v1, 16
     beq     $v1, $v0, 9f
-    nop
+    sh      $v0, OFF_IR3($t0)            /* common case: fill the delay slot */
     slt     $v1, $v0, $zero
     bne     $v1, $zero, 8f
     nop
     li      $v0, 32767
-    b       9f
+    b       7f
     nop
 8:
     li      $v0, -32768
-9:
+7:
     sh      $v0, OFF_IR3($t0)
+9:
     /* limD: depth is an unsigned 16-bit saturated value. */
-    beq     $v0, $zero, 7f
+    srl     $v1, $v0, 16
+    beq     $v1, $zero, 6f
     nop
     slt     $v1, $v0, $zero
     bne     $v1, $zero, 7f
-    nop
-    srl     $v1, $v0, 16
-    beq     $v1, $zero, 6f
     nop
     li      $v0, 65535
     b       6f
@@ -258,17 +259,18 @@ gte_RTPT_asm:
     addiu   $a3, $v0, 1024
     sltiu   $v1, $a3, 2048
     bne     $v1, $zero, 5f
-    nop
+    sh      $v0, \SXYOFF($t0)             /* common case: fill the delay slot */
     slt     $v1, $v0, $zero
     bne     $v1, $zero, 4f
     nop
     li      $v0, 1023
-    b       5f
+    b       6f
     nop
 4:
     li      $v0, -1024
-5:
+6:
     sh      $v0, \SXYOFF($t0)
+5:
 
     /* SY = (OFY + IR2*quotient) >> 16. */
     mult    $a1, $a2
@@ -286,17 +288,18 @@ gte_RTPT_asm:
     addiu   $a3, $v0, 1024
     sltiu   $v1, $a3, 2048
     bne     $v1, $zero, 5f
-    nop
+    sh      $v0, \SXYOFF+2($t0)           /* common case: fill the delay slot */
     slt     $v1, $v0, $zero
     bne     $v1, $zero, 4f
     nop
     li      $v0, 1023
-    b       5f
+    b       6f
     nop
 4:
     li      $v0, -1024
-5:
+6:
     sh      $v0, \SXYOFF+2($t0)
+5:
 .endm
 
     RTPT_VERTEX OFF_CP2D+0, OFF_CP2D+4, OFF_SXY0, OFF_SZ1
@@ -319,17 +322,18 @@ gte_RTPT_asm:
     /* limH: saturate IR0 to [0, 0x1000]. */
     sltiu   $v1, $v0, 4097
     bne     $v1, $zero, 2f
-    nop
+    sh      $v0, OFF_IR0($t0)             /* common case: fill the delay slot */
     slt     $v1, $v0, $zero
     bne     $v1, $zero, 1f
     nop
     li      $v0, 4096
-    b       2f
+    b       3f
     nop
 1:
     move    $v0, $zero
-2:
+3:
     sh      $v0, OFF_IR0($t0)
+2:
 
     lw      $s0, 0($sp)
     lw      $s1, 4($sp)
