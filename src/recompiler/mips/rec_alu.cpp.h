@@ -70,10 +70,16 @@ static void recADDIU()
 	 * arithmetic sequence. */
 	if (fuzzy_ram_addr)
 		SetFuzzyRamAddr(_Rt_);
+	/* Mode 2 is the conservative physical candidate: a propagated non-RAM
+	 * bit forces helper-only accesses, so carrying it through an ADDIU can
+	 * turn a cheap inline sequence into a C-call sequence.  RAM is the only
+	 * class that can remove a range check without adding a helper call. */
+#if QPSX_MIPS_PROPAGATE_FUZZY_ADDR == 1
 	if (fuzzy_nonram_addr)
 		SetFuzzyNonramAddr(_Rt_);
 	if (fuzzy_scratchpad_addr)
 		SetFuzzyScratchpadAddr(_Rt_);
+#endif
 #endif
 }
 static void recADDI() { recADDIU(); }

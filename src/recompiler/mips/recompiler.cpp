@@ -88,9 +88,9 @@ extern "C" void xlog(const char *fmt, ...);
 #define QPSX_MIPS_FAST_MEM_CONVERT 0
 #endif
 /* Propagate the existing fuzzy PS1-address classification through ADDIU.
- * This is deliberately opt-in: the older ADDU heuristic only records a
- * broad region (not an interval), so a physical A/B must confirm that the
- * extra range-check elisions do not encounter deliberately wrapping code. */
+ * 0 is off, 1 carries all region bits, and 2 carries only the RAM bit.  The
+ * RAM-only mode avoids turning address arithmetic on ROM/I/O pointers into
+ * helper-only loads/stores while retaining the range-check elision candidate. */
 #ifndef QPSX_MIPS_PROPAGATE_FUZZY_ADDR
 #define QPSX_MIPS_PROPAGATE_FUZZY_ADDR 0
 #endif
@@ -364,7 +364,15 @@ static inline bool IsFuzzyScratchpadAddr(const u32 reg)  { return iRegs[reg].is_
 #define RECMEM_SIZE         (12 * 1024 * 1024)
 #endif
 #define RECMEM_SIZE_MAX     (RECMEM_SIZE-(256*1024))
-static u8 recMemBase[RECMEM_SIZE] __attribute__((aligned(4)));
+#ifndef QPSX_RECMEM_ALIGNMENT
+#define QPSX_RECMEM_ALIGNMENT 4
+#endif
+/* The generated stream is instruction-cache hot and the HC15xx has
+ * 16-byte lines.  Keep the historical 4-byte default for compatibility, but
+ * allow physical A/B builds to shift the entire stream by a cache-line
+ * boundary without changing generated instructions or audio/video behavior. */
+static u8 recMemBase[RECMEM_SIZE]
+	__attribute__((aligned(QPSX_RECMEM_ALIGNMENT)));
 
 u32        *recMem;                /* Where does next emitted opcode in block go? */
 static u32 *recMemStart;           /* Where did first emitted opcode in block go? */

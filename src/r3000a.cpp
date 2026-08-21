@@ -143,6 +143,7 @@ extern "C" void xlog(const char *fmt, ...);
 
 #ifdef PSXREC
 extern "C" void recLogTelemetry(void);
+extern u32 *recMem;
 #endif
 
 PcsxConfig Config;
@@ -201,6 +202,12 @@ int psxInit() {
 	//  memory mappings it needs for psxM,psxH etc.
 	if (psxCpu->Init() < 0)
 		return -1;
+	#ifdef PSXREC
+	/* The generated-code window is process-relative on Linux NOMMU.  Record
+	 * its actual address so the QEMU cache model never mistakes a kernel text
+	 * range for recRAM when ASLR/loader placement changes. */
+	xlog("QPSX: rec address recMem=%08x", (unsigned)(uptr)recMem);
+	#endif
 	return psxMemInit();
 }
 
