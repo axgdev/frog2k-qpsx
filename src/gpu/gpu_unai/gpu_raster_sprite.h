@@ -21,6 +21,17 @@
 ///////////////////////////////////////////////////////////////////////////////
 //  GPU internal sprite drawing functions
 
+#ifndef QPSX_GPU_GE_TILE_FILL
+#define QPSX_GPU_GE_TILE_FILL 0
+#endif
+#ifndef QPSX_GPU_GE_TILE_FILL_MIN_PIXELS
+#define QPSX_GPU_GE_TILE_FILL_MIN_PIXELS 4096
+#endif
+#if QPSX_GPU_GE_TILE_FILL
+extern "C" int sf2000_ge_fill_psx_rect(void *, unsigned, unsigned,
+	unsigned, unsigned, unsigned short) __attribute__((weak));
+#endif
+
 void gpuDrawS(PtrUnion packet, const PS gpuSpriteSpanDriver)
 {
 	s32 x0, x1, y0, y1;
@@ -152,6 +163,25 @@ void gpuDrawT(PtrUnion packet, const PT gpuTileSpanDriver)
 	if (x1 <= 0) return;
 
 	const u16 Data = GPU_RGB16(packet.U4[0]);
+
+#if QPSX_GPU_GE_TILE_FILL
+	/*
+	 * HC15xx has no triangle engine, but its GE can fill a rectangle in the
+	 * PSX VRAM's native 15-bit layout.  A Ridge Racer trace spends about 100
+	 * million CPU pixel stores in opaque CF=0 tiles, mostly framebuffer
+	 * clears.  Keep small tiles in the cache-friendly software loop and offer
+	 * only large, unmasked, non-interlaced fills to the platform.  The weak
+	 * boundary keeps other ports and hosts on the exact software renderer.
+	 */
+	const u32 area = (u32)x1 * (u32)(y1 - y0);
+	if (gpuTileSpanDriver == gpuTileSpanDrivers[0] &&
+		gpu_unai.ilace_mask == 0 && !ProgressiveInterlaceEnabled() &&
+		area >= QPSX_GPU_GE_TILE_FILL_MIN_PIXELS &&
+		sf2000_ge_fill_psx_rect &&
+		sf2000_ge_fill_psx_rect(gpu_unai.vram, (unsigned)x0,
+			(unsigned)y0, (unsigned)x1, (unsigned)(y1 - y0), Data))
+		return;
+#endif
 	u16 *Pixel = &((u16*)gpu_unai.vram)[FRAME_OFFSET(x0, y0)];
 	const int li=gpu_unai.ilace_mask;
 	const int pi=(ProgressiveInterlaceEnabled()?(gpu_unai.ilace_mask+1):0);
