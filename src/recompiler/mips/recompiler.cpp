@@ -96,6 +96,14 @@ extern "C" void xlog(const char *fmt, ...);
 #define QPSX_MIPS_PERSISTENT_RETURN_RA 0
 #endif
 
+/* On the Linux NOMMU path the small PC->host-code cache is direct-mapped and
+ * can miss in the tiny D-cache.  A MIPS load prefetch is safe on MIPS32r1 and
+ * lets the loop overlap that fill with its existing cycle/event loads.  Keep
+ * it opt-in: on a cache that already hits, the extra hint is pure overhead. */
+#ifndef QPSX_MIPS_DISPATCH_PREFETCH
+#define QPSX_MIPS_DISPATCH_PREFETCH 0
+#endif
+
 
 /* Fold a bounded number of short, forward unconditional jumps into the
  * current translated block.  This removes an indirect-dispatch round trip
@@ -954,6 +962,9 @@ __asm__ __volatile__ (
 "sll   $t2, $t2, 1                            \n" // eight bytes per entry
 "lw    $t1, f_off_dispatch_cache($sp)         \n"
 "addu  $t6, $t1, $t2                          \n" // $t6 = cache entry
+#if QPSX_MIPS_DISPATCH_PREFETCH
+"pref  0, 0($t6)                              \n" // overlap cache fill with cycle loads
+#endif
 "lw    $t5, 0($t6)                            \n" // cached guest PC
 "lw    $t0, 4($t6)                            \n" // cached host code
 "lw    $t4, %[psxRegs_io_cycle_ctr_off]($fp)  \n" // $t4 = psxRegs.io_cycle_counter
