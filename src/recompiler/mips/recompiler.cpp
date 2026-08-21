@@ -78,6 +78,15 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_MIPS_PSMEM_REG
 #define QPSX_MIPS_PSMEM_REG 0
 #endif
+/* On the NOMMU fallback, keep the PSX RAM base in $s7 and fold the 21-bit
+ * RAM mirror mask directly into the destination register.  The old sequence
+ * copied $s7 to the destination first, then masked into a temporary and added
+ * it, costing one extra emitted instruction for every converted base.  This
+ * is deliberately opt-in and keeps the old sequence as a defensive fallback
+ * if a caller violates the emitter's temporary-register contract. */
+#ifndef QPSX_MIPS_FAST_MEM_CONVERT
+#define QPSX_MIPS_FAST_MEM_CONVERT 0
+#endif
 /* Keep the indirect-return target in $ra across blocks that contain no C
  * helper call.  The old loop reloaded the same stack value in every block's
  * jump delay slot, even though the recompiler already restores $ra only when

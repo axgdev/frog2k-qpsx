@@ -269,10 +269,40 @@ static u32 emitAddressConversion(const u32 op_rs,
 		//            handle the three 2MB PS1 RAM mirrors. Caller knows it can
 		//            only use the converted base reg to access PS1 RAM.
 
-			#if QPSX_MIPS_PSMEM_REG
-			/* Copy the stable base; tmp_reg is filled by the mask below. */
-			MOV(desired_reg, PERM_REG_2);
+		#if QPSX_MIPS_PSMEM_REG && QPSX_MIPS_FAST_MEM_CONVERT
+		/* The normal callers use a temporary destination (T0/T1) while
+		 * guest base registers live in S0-S6.  Mask in-place and add the
+		 * stable base, avoiding the old MOV $s7,dest.  If a future caller
+		 * aliases the destination, use the supplied temporary as the result
+		 * so the guest base and the stable $s7 pointer both survive. */
+		if (desired_reg != rs && desired_reg != PERM_REG_2) {
+		#ifdef HAVE_MIPS32R2_EXT_INS
+		EXT(desired_reg, rs, 0, 21);
+		#else
+		SLL(desired_reg, rs, 11);
+		SRL(desired_reg, desired_reg, 11);
+		#endif
+			ADDU(desired_reg, PERM_REG_2, desired_reg);
+			return desired_reg;
+		}
+		if (tmp_reg != rs && tmp_reg != PERM_REG_2) {
+			#ifdef HAVE_MIPS32R2_EXT_INS
+			EXT(tmp_reg, rs, 0, 21);
 			#else
+			SLL(tmp_reg, rs, 11);
+			SRL(tmp_reg, tmp_reg, 11);
+			#endif
+			ADDU(tmp_reg, PERM_REG_2, tmp_reg);
+			return tmp_reg;
+		}
+		/* The emitter's register contract makes this unreachable; retain the
+		 * original sequence for a defensive build if that contract changes. */
+		MOV(desired_reg, PERM_REG_2);
+		#else
+		#if QPSX_MIPS_PSMEM_REG
+		/* Copy the stable base; tmp_reg is filled by the mask below. */
+		MOV(desired_reg, PERM_REG_2);
+		#else
 		LW(desired_reg, PERM_REG_1, off(psxM));
 		#endif
 #ifdef HAVE_MIPS32R2_EXT_INS
@@ -282,6 +312,7 @@ static u32 emitAddressConversion(const u32 op_rs,
 		SRL(tmp_reg, tmp_reg, 11);
 #endif
 		ADDU(desired_reg, desired_reg, tmp_reg);
+		#endif
 	}
 
 	return desired_reg;
