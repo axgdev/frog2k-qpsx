@@ -587,22 +587,11 @@ qpsx_gpu_do_cmd_buffer_body(uint32_t *data, int count,
   return count - pos;
 }
 
-/* This runs once per completed command buffer (and once per safe chain), not
- * per packet.  Keeping it out-of-line prevents the fast chain loop from
- * carrying two copies of the status/fb publication sequence in the tiny
- * instruction cache. */
+/* Defined after GPU_dmaChain so the optional path does not move this helper
+ * into the middle of the command-parser hot section.  It runs once per
+ * completed command buffer (or safe chain), never per packet. */
 QPSX_HOT_GPU static noinline void
-qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3)
-{
-  gpu.status.reg &= ~0x1fff;
-  gpu.status.reg |= gpu.ex_regs[1] & 0x7ff;
-  gpu.status.reg |= (gpu.ex_regs[6] & 3) << 11;
-
-  gpu.state.fb_dirty |= vram_dirty;
-
-  if (old_e3 != gpu.ex_regs[3])
-    decide_frameskip_allow(gpu.ex_regs[3]);
-}
+qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3);
 
 QPSX_HOT_GPU static noinline int do_cmd_buffer(uint32_t *data, int count)
 {
@@ -707,9 +696,10 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
   int len, left, count;
   long cpu_cycles = 0;
 #if QPSX_GPU_DMA_CHAIN_FAST
-  struct qpsx_gpu_dma_chain_fast_state fast_state;
   int chain_fast;
-  int fast_profile_active = 0;
+  int chain_saw_node = 0;
+  int chain_dirty = 0;
+  uint32_t chain_old_e3;
 #endif
 
   preload(rambase + (start_addr & 0x1fffff) / 4);
@@ -727,9 +717,8 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
    * state, not gpulib's status or fb_dirty fields.  The latter are only
    * exposed after this call (GPU_readStatus/GPU_updateLace), so publication
    * may be deferred across ordinary nodes. */
-  chain_fast = qpsx_gpu_dma_chain_fast_begin(
-      &fast_state, gpu.cmd_len, gpu.frameskip.active, gpu.dma.h != 0,
-      gpu.ex_regs[3]);
+  chain_fast = (gpu.cmd_len == 0 && !gpu.frameskip.active && !gpu.dma.h);
+  chain_old_e3 = gpu.ex_regs[3];
 #endif
 
   log_io("gpu_dma_chain\n");
@@ -751,29 +740,20 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
 #if QPSX_GPU_DMA_CHAIN_FAST
       if (chain_fast) {
         int segment_dirty;
-        int commit;
 
-        if (!fast_profile_active) {
+        if (!chain_saw_node)
           PROFILE_START(PROF_GPU_TOTAL);
-          fast_profile_active = 1;
-        }
+        chain_saw_node = 1;
         left = qpsx_gpu_do_cmd_buffer_body(
             list + 1, len, &segment_dirty);
         if (left)
           log_anomaly("GPUdmaChain: discarded %d/%d words\n", left, len);
 
-        commit = qpsx_gpu_dma_chain_fast_node(
-            &fast_state, segment_dirty, left, gpu.dma.h != 0,
-            gpu.frameskip.active);
-        if (commit) {
-          qpsx_gpu_finish_cmd_buffer(fast_state.pending_dirty,
-                                     fast_state.old_e3);
-          qpsx_gpu_dma_chain_fast_commit(&fast_state);
-          if (!fast_state.active) {
-            PROFILE_END(PROF_GPU_TOTAL);
-            fast_profile_active = 0;
-            chain_fast = 0;
-          }
+        chain_dirty |= segment_dirty;
+        if (left || gpu.dma.h || gpu.frameskip.active) {
+          qpsx_gpu_finish_cmd_buffer(chain_dirty, chain_old_e3);
+          PROFILE_END(PROF_GPU_TOTAL);
+          chain_fast = 0;
         }
       } else
 #endif
@@ -811,11 +791,10 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
 
 #if QPSX_GPU_DMA_CHAIN_FAST
   if (chain_fast) {
-    if (fast_state.saw_node)
-      qpsx_gpu_finish_cmd_buffer(fast_state.pending_dirty,
-                                 fast_state.old_e3);
-    if (fast_profile_active)
+    if (chain_saw_node) {
+      qpsx_gpu_finish_cmd_buffer(chain_dirty, chain_old_e3);
       PROFILE_END(PROF_GPU_TOTAL);
+    }
   }
 #endif
 
@@ -826,6 +805,24 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
 
   return cpu_cycles;
 }
+
+#if QPSX_GPU_DMA_CHAIN_FAST
+/* Keep this cold relative to the parser and chain traversal.  The guarded
+ * path calls it only once at the end of a safe chain, or once when it must
+ * fall back to legacy per-node publication. */
+QPSX_HOT_GPU static noinline void
+qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3)
+{
+  gpu.status.reg &= ~0x1fff;
+  gpu.status.reg |= gpu.ex_regs[1] & 0x7ff;
+  gpu.status.reg |= (gpu.ex_regs[6] & 3) << 11;
+
+  gpu.state.fb_dirty |= vram_dirty;
+
+  if (qpsx_gpu_dma_chain_finish_needed(old_e3, gpu.ex_regs[3]))
+    decide_frameskip_allow(gpu.ex_regs[3]);
+}
+#endif
 
 void GPU_readDataMem(uint32_t *mem, int count)
 {
