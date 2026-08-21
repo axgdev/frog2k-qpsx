@@ -606,65 +606,14 @@ static void gen_LWC2_SWC2()
 
 			if (_fOp_(opcode) == 0x32) {
 				// LWC2
-				// QPSX NOMMU scratchpad fast path: on the SF2000 there is no
-				//  virtual mirror, so this else-branch is what LWC2/SWC2 use,
-				//  and the C-helper call per access is the top remaining cost
-				//  (Ridge Racer streams most of its vertex data through the
-				//  scratchpad via LWC2/SWC2). Mirror the proven rec_lsu fast
-				//  path: divert 0x1f80_0000..0x1f80_03ff to psxH[m] inline;
-				//  everything else (RAM, HW regs, ROM) keeps the helper call
-				//  with identical semantics.
-				{
-					u32 *lbl_helper = 0, *lbl_hw = 0, *lbl_done = 0;
-					ADDIU(MIPSREG_A0, rs, _fImm_(opcode)); // eff addr (also helper arg)
-					SRL(TEMP_1, MIPSREG_A0, 16);
-					XORI(TEMP_1, TEMP_1, 0x1f80);          // t == 0x1f80 ?
-					lbl_helper = (u32 *)recMem;
-					BNE(TEMP_1, 0, 0);                     // not scratchpad/hw -> helper
-					ANDI(TEMP_2, MIPSREG_A0, 0xffff);      // <BD> m = addr & 0xffff
-					SLTIU(TEMP_3, TEMP_2, 0x400);           // m < 0x400 (scratchpad)?
-					lbl_hw = (u32 *)recMem;
-					BEQZ(TEMP_3, 0);                       // hardware regs -> helper
-					LUI(TEMP_3, ADR_HI((uptr)psxH));       // <BD> psxH high half
-					ADDU(TEMP_3, TEMP_3, TEMP_2);           // psxH + m
-					LSU_OPCODE(0x8c000000, MIPSREG_V0, TEMP_3, ADR_LO((uptr)psxH)); // LW v0, lo(psxH)(t3)
-					lbl_done = (u32 *)recMem;
-					B(0);                                  // -> done
-					NOP();                                 // <BD>
-					fixup_branch(lbl_helper);
-					fixup_branch(lbl_hw);
-					JAL(psxMemRead32);                     // helper: addr already in $a0
-					NOP();                                 // <BD> (result not ready yet)
-					fixup_branch(lbl_done);
-				}
+				JAL(psxMemRead32);                     // Read value from memory
+				ADDIU(MIPSREG_A0, rs, _fImm_(opcode)); // <BD>
 				emitMTC2(MIPSREG_V0, _fRt_(opcode));   // Move value read to GTE reg
 			} else if (_fOp_(opcode) == 0x3a) {
 				// SWC2
 				emitMFC2(MIPSREG_A1, _fRt_(opcode));   // Get GTE reg value
-				// QPSX NOMMU scratchpad fast path (see LWC2 above).
-				{
-					u32 *lbl_helper = 0, *lbl_hw = 0, *lbl_done = 0;
-					ADDIU(MIPSREG_A0, rs, _fImm_(opcode)); // eff addr (also helper arg)
-					SRL(TEMP_1, MIPSREG_A0, 16);
-					XORI(TEMP_1, TEMP_1, 0x1f80);          // t == 0x1f80 ?
-					lbl_helper = (u32 *)recMem;
-					BNE(TEMP_1, 0, 0);                     // not scratchpad/hw -> helper
-					ANDI(TEMP_2, MIPSREG_A0, 0xffff);      // <BD> m = addr & 0xffff
-					SLTIU(TEMP_3, TEMP_2, 0x400);           // m < 0x400 (scratchpad)?
-					lbl_hw = (u32 *)recMem;
-					BEQZ(TEMP_3, 0);                       // hardware regs -> helper
-					LUI(TEMP_3, ADR_HI((uptr)psxH));       // <BD> psxH high half
-					ADDU(TEMP_3, TEMP_3, TEMP_2);           // psxH + m
-					LSU_OPCODE(0xac000000, MIPSREG_A1, TEMP_3, ADR_LO((uptr)psxH)); // SW a1, lo(psxH)(t3)
-					lbl_done = (u32 *)recMem;
-					B(0);                                  // -> done
-					NOP();                                 // <BD>
-					fixup_branch(lbl_helper);
-					fixup_branch(lbl_hw);
-					JAL(psxMemWrite32);                    // helper: $a0=addr, $a1=value
-					NOP();                                 // <BD>
-					fixup_branch(lbl_done);
-				}
+				JAL(psxMemWrite32);                    // Write GTE reg to memory
+				ADDIU(MIPSREG_A0, rs, _fImm_(opcode)); // <BD>
 			}
 		} while (--count);
 
