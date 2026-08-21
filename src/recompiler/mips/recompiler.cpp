@@ -33,6 +33,8 @@
 #include "psxhw.h"
 #include "r3000a.h"
 #include "gte.h"
+#include "qpsx_build_config.h"
+#include "qpsx_phase_metrics.h"
 
 /* For direct HW I/O */
 #include "mdec.h"
@@ -897,7 +899,7 @@ __attribute__((noinline)) static void recFunc(void *fn)
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) void recExecute_indirect_return_lut()
+QPSX_HOT_REC __attribute__((noinline)) void recExecute_indirect_return_lut()
 {
 	// Set block_ret_addr to 0, so generated code uses indirect returns
 	block_ret_addr = block_fast_ret_addr = 0;
@@ -1182,7 +1184,7 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecute_indirect_return_mmap()
+QPSX_HOT_REC __attribute__((noinline)) static void recExecute_indirect_return_mmap()
 {
 	// Set block_ret_addr to 0, so generated code uses indirect returns
 	block_ret_addr = block_fast_ret_addr = 0;
@@ -1376,7 +1378,7 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecute_direct_return_lut()
+QPSX_HOT_REC __attribute__((noinline)) static void recExecute_direct_return_lut()
 {
 __asm__ __volatile__ (
 // NOTE: <BD> indicates an instruction in a branch-delay slot
@@ -1594,7 +1596,7 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecute_direct_return_mmap()
+QPSX_HOT_REC __attribute__((noinline)) static void recExecute_direct_return_mmap()
 {
 __asm__ __volatile__ (
 // NOTE: <BD> indicates an instruction in a branch-delay slot
@@ -1814,7 +1816,7 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecuteBlock(unsigned target_pc)
+QPSX_HOT_REC __attribute__((noinline)) static void recExecuteBlock(unsigned target_pc)
 {
 	// Set block_ret_addr to 0, so generated code uses indirect returns
 	block_ret_addr = block_fast_ret_addr = 0;
@@ -2146,6 +2148,7 @@ __asm__ __volatile__ (
 
 static void recExecute()
 {
+	QPSX_PHASE_REC();
 	// QPSX_039: Only reset code cache on first call
 	// Prevents slow frame execution caused by clearing cache every frame
 	static bool rec_initialized = false;

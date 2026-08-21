@@ -44,6 +44,14 @@ QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES ?= 0
 QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL ?= 0
 QPSX_GPU_4BPP_GOURAUD_CACHE ?= 0
 QPSX_GPU_DIRECT_PACKET ?= 0
+# Keep the small, repeatedly entered dispatch/raster/audio entry points in
+# GCC's .text.hot subsection.  This is an I-cache layout candidate only: all
+# algorithms and compatibility fallbacks are unchanged when it is disabled.
+QPSX_HOT_LAYOUT ?= 0
+# Optional 300-frame phase counters for physical-device attribution.  The
+# default is a compile-time no-op; diagnostic cores opt in explicitly because
+# per-command counters necessarily add work to the measured CPU path.
+QPSX_PHASE_METRICS ?= 0
 # Emit one architecturally harmless, uniquely encoded MIPS no-op per
 # retro_run.  QEMU's cache oracle recognizes it as an exact frame boundary;
 # the physical target pays one instruction per frame and tests the identical
@@ -73,6 +81,8 @@ QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL=$(QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL) \
 	-DQPSX_GPU_4BPP_GOURAUD_CACHE=$(QPSX_GPU_4BPP_GOURAUD_CACHE) \
 	-DQPSX_GPU_DIRECT_PACKET=$(QPSX_GPU_DIRECT_PACKET) \
+	-DQPSX_HOT_LAYOUT=$(QPSX_HOT_LAYOUT) \
+	-DQPSX_PHASE_METRICS=$(QPSX_PHASE_METRICS) \
 	-DQPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS) \
 	-DQPSX_BUILD_TAG=\"$(QPSX_BUILD_TAG)\" \
 	-DQPSX_BUILD_FINGERPRINT=\"$(QPSX_BUILD_FINGERPRINT)\" \
@@ -193,6 +203,8 @@ $(QPSX_CONFIG_STAMP): qpsx-config-force
 		'QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL=$(QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL)' \
 		'QPSX_GPU_4BPP_GOURAUD_CACHE=$(QPSX_GPU_4BPP_GOURAUD_CACHE)' \
 		'QPSX_GPU_DIRECT_PACKET=$(QPSX_GPU_DIRECT_PACKET)' \
+		'QPSX_HOT_LAYOUT=$(QPSX_HOT_LAYOUT)' \
+		'QPSX_PHASE_METRICS=$(QPSX_PHASE_METRICS)' \
 		'QPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS)' \
 		'QPSX_BUILD_TAG=$(QPSX_BUILD_TAG)' \
 		'QPSX_BUILD_FINGERPRINT=$(QPSX_BUILD_FINGERPRINT)' \
@@ -279,6 +291,9 @@ ifneq ($(filter unifrog linux,$(QPSX_PLATFORM)),)
 OBJS += \
 	src/spu/$(SPU)/cdda_mix_asm.o
 endif
+
+OBJS += \
+	src/qpsx_phase_metrics.o
 
 # Plugin lib
 OBJS += \

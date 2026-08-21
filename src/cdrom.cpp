@@ -38,6 +38,8 @@
 #include "ppf.h"
 #include "psxdma.h"
 #include "psxevents.h"
+#include "qpsx_build_config.h"
+#include "qpsx_phase_metrics.h"
 
 /*
  * v367: CDDA Mode system - 3 modes for different use cases
@@ -1165,7 +1167,8 @@ void cdrAttenuate(s16 *buf, int samples, int stereo)
 	}
 }
 
-void cdrReadInterrupt() {
+QPSX_HOT_CD void cdrReadInterrupt() {
+	QPSX_PHASE_CD();
 	u8 *buf;
 
 	if (!cdr.Reading)

@@ -31,6 +31,8 @@
 #include "out.h"
 #include "spu_config.h"
 #include "profiler.h"   /* v092: Profiler support */
+#include "qpsx_build_config.h"
+#include "qpsx_phase_metrics.h"
 
 /* v392: Sound mode from libretro-core.cpp: 0=OFF, 1=ON, 2=TURBO */
 extern int qpsx_sound_mode;
@@ -1096,7 +1098,7 @@ static const void * const worker = NULL;
 // here is the main job handler...
 ////////////////////////////////////////////////////////////////////////
 
-void do_samples(unsigned int cycles_to, int do_direct)
+QPSX_HOT_SPU void do_samples(unsigned int cycles_to, int do_direct)
 {
  PROFILE_START(PROF_SPU_TOTAL);
 
@@ -1105,6 +1107,7 @@ void do_samples(unsigned int cycles_to, int do_direct)
  int ns_to;
 
  cycle_diff = cycles_to - spu.cycles_played;
+ QPSX_PHASE_SPU(cycle_diff > 0 ? (unsigned)cycle_diff : 0);
  if (cycle_diff < -2*1048576 || cycle_diff > 2*1048576)
   {
    //xprintf("desync %u %d\n", cycles_to, cycle_diff);

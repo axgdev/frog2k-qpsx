@@ -43,6 +43,7 @@
 #include "cdriso.h"  /* v258: CDDA conversion functions */
 #include "plugin_lib/plugin_lib.h"  /* QPSX_280: For pl_init() */
 #include "cdrom.h"   /* v283: For LidInterrupt() */
+#include "qpsx_phase_metrics.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -3900,6 +3901,7 @@ void retro_run(void)
     }
     run_frame_count++;
     qpsx_performance_frame_marker();
+    QPSX_PHASE_FRAME(run_frame_count);
     input_debug_counter++;
     if (g_debug_log_enabled && (run_frame_count % 60 == 0)) {
         XLOG("retro_run progress: frame %d", run_frame_count);

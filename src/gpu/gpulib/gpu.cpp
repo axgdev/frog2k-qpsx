@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include "plugins.h"    // For GPUFreeze_t, GPUScreenInfo_t
 #include "gpu.h"
+#include "qpsx_build_config.h"
 #include "plugin_lib.h"
 #include "profiler.h"   /* v092: Profiler support */
 
@@ -466,7 +467,7 @@ static void finish_vram_transfer(int is_read)
                            gpu.dma_start.w, gpu.dma_start.h);
 }
 
-static noinline int do_cmd_list_skip(uint32_t *data, int count, int *last_cmd)
+QPSX_HOT_GPU static noinline int do_cmd_list_skip(uint32_t *data, int count, int *last_cmd)
 {
   int cmd = 0, pos = 0, len, dummy, v;
   int skip = 1;
@@ -532,7 +533,7 @@ static noinline int do_cmd_list_skip(uint32_t *data, int count, int *last_cmd)
   return pos;
 }
 
-static noinline int do_cmd_buffer(uint32_t *data, int count)
+QPSX_HOT_GPU static noinline int do_cmd_buffer(uint32_t *data, int count)
 {
   PROFILE_START(PROF_GPU_TOTAL);
 

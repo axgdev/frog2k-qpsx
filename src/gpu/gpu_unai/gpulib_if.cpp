@@ -27,6 +27,8 @@
 #include "gpu/gpulib/gpu.h"
 #include "port.h"
 #include "gpu_unai.h"
+#include "qpsx_build_config.h"
+#include "qpsx_phase_metrics.h"
 
 /* SF2000 xlog debugging */
 #ifdef SF2000
@@ -340,11 +342,13 @@ extern const unsigned char cmd_lengths[256];
 #define QPSX_GPU_DIRECT_PACKET 0
 #endif
 
-int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
+QPSX_HOT_GPU int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
 {
   uint32_t cmd = 0, len, i;
   uint32_t *list_start = list;
   uint32_t *list_end = list + list_len;
+
+  QPSX_PHASE_GPU((unsigned)list_len);
 
   //TODO: set ilace_mask when resolution changes instead of every time,
   // eliminate #ifdef below.

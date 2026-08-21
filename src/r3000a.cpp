@@ -96,6 +96,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_PERFORMANCE_FRAME_MARKERS
 #define QPSX_PERFORMANCE_FRAME_MARKERS 0
 #endif
+#ifndef QPSX_PHASE_METRICS
+#define QPSX_PHASE_METRICS 0
+#endif
 #ifndef QPSX_GPU_DIRECT_PACKET
 #define QPSX_GPU_DIRECT_PACKET 0
 #endif
@@ -148,6 +151,9 @@ extern "C" void xlog(const char *fmt, ...);
 #endif
 #ifndef QPSX_GPU_HOT_DRIVER_ORDER
 #define QPSX_GPU_HOT_DRIVER_ORDER 0
+#endif
+#ifndef QPSX_HOT_LAYOUT
+#define QPSX_HOT_LAYOUT 0
 #endif
 #ifndef QPSX_MIPS_DISPATCH_CACHE_GP
 #define QPSX_MIPS_DISPATCH_CACHE_GP 0
@@ -235,13 +241,14 @@ int psxInit() {
 	     QPSX_GPU_DIRECT_PACKET);
 	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d",
 	     QPSX_GPU_GOURAUD_LINE_FLATFAST);
-	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d gcache=%d fullmask=%d fullmask_min=%d pack4=%d",
+	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d gcache=%d fullmask=%d fullmask_min=%d pack4=%d hot_layout=%d phase_metrics=%d",
 	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
 	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,
 	     QPSX_GPU_4BPP_PALETTE_LUT, QPSX_GPU_4BPP_GOURAUD_CACHE,
 	     QPSX_GPU_4BPP_FULLMASK,
 	     QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS,
-	     QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES);
+	     QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES,
+	     QPSX_HOT_LAYOUT, QPSX_PHASE_METRICS);
 
 #ifdef PSXREC
 	#ifndef interpreter_none
