@@ -88,6 +88,9 @@
 #ifndef QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS
 #define QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS 16
 #endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
+#define QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES 0
+#endif
 #ifndef QPSX_GPU_GOURAUD_LINE_FLATFAST
 #define QPSX_GPU_GOURAUD_LINE_FLATFAST 0
 #endif
@@ -407,14 +410,41 @@ qpsx_gpu_poly_span_4bpp_fullmask(const gpu_unai_t &gpu_unai,
 			++packed_row;
 			--count;
 		}
+	#if QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
+		/* The CF=32 path has no blend, mask, or lighting side effects. Once
+		 * the span is on a 32-bit boundary, two opaque RGB555 texels can be
+		 * committed with one store. Keep transparent pairs on the exact
+		 * per-pixel fallback because a zero CLUT entry must leave VRAM alone.
+		 * The alignment peel is outside the pair loop so the MIPS target does
+		 * not pay an alignment test for every two pixels. */
+		if (((uintptr_t)pDst & 2u) && count) {
+			const u16 src = cba[*packed_row & 0xfu];
+			if (src)
+				*pDst = src;
+			++pDst;
+			++packed_row;
+			--count;
+		}
+	#endif
 		while (count >= 2) {
 			const u8 packed = *packed_row++;
 			const u16 src0 = cba[packed & 0xfu];
 			const u16 src1 = cba[packed >> 4];
+		#if QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
+			if (src0 && src1)
+				*(u32 *)(void *)pDst = (u32)src0 | ((u32)src1 << 16);
+			else {
+				if (src0)
+					pDst[0] = src0;
+				if (src1)
+					pDst[1] = src1;
+			}
+		#else
 			if (src0)
 				pDst[0] = src0;
 			if (src1)
 				pDst[1] = src1;
+		#endif
 			pDst += 2;
 			count -= 2;
 		}
