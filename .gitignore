@@ -23,3 +23,4 @@ Thumbs.db
 /tests/gpu_dma_chain_fast_diff
 /tests/gte_intpl_diff
 /tests/gte_rtpt_layout_audit
+/tests/psxmem_asm_classifier

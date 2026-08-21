@@ -53,6 +53,24 @@
 #else
 #define QPSX_ASM_HAS_PSMEM_REG 0
 #endif
+
+/* The PS1 hardware window has exactly three high-half aliases.  Since the
+ * helpers receive a 16-bit high half in $t0, masking bit 15 folds only
+ * 0x1f80 and 0x9f80 together; 0xbf80 still needs its own comparison.  Keep
+ * this sequence shared by every exported helper so a dormant write entry
+ * point cannot retain the historical mask-only false positives.  The first
+ * branch delay slot also computes m for both the match and fall-through
+ * paths. */
+    .macro QPSX_ASM_HW_CLASSIFY target
+    andi    $t1, $t0, 0x7FFF
+    li      $t2, 0x1F80
+    beq     $t1, $t2, \target
+    andi    $t3, $a0, 0xFFFF
+    li      $t2, 0xBF80
+    beq     $t0, $t2, \target
+    nop
+    .endm
+
     .extern psxHwRead32
     .extern psxHwRead16
     .extern psxHwRead8
@@ -74,11 +92,8 @@ psxMemWrite32_asm:
     /* Extract high 16 bits: t = mem >> 16 */
     srl     $t0, $a0, 16            /* $t0 = t = mem >> 16 */
 
-    /* Check for HW region: 0x1f80, 0x9f80, 0xbf80 */
-    andi    $t1, $t0, 0x1F80        /* $t1 = t & 0x1F80 */
-    li      $t2, 0x1F80
-    beq     $t1, $t2, .Lhw_write32  /* if HW region, branch */
-    andi    $t3, $a0, 0xFFFF        /* $t3 = m = mem & 0xFFFF (delay slot) */
+    /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
+    QPSX_ASM_HW_CLASSIFY .Lhw_write32
 
     /*----------------------------------------------------------------------
      * RAM Fast Path (most common case)
@@ -163,11 +178,8 @@ psxMemWrite32_asm:
 psxMemWrite16_asm:
     srl     $t0, $a0, 16            /* $t0 = t = mem >> 16 */
 
-    /* Check for HW region */
-    andi    $t1, $t0, 0x1F80
-    li      $t2, 0x1F80
-    beq     $t1, $t2, .Lhw_write16
-    andi    $t3, $a0, 0xFFFF        /* $t3 = m (delay slot) */
+    /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
+    QPSX_ASM_HW_CLASSIFY .Lhw_write16
 
     /* RAM path */
     la      $t4, psxMemWLUT
@@ -232,11 +244,8 @@ psxMemWrite16_asm:
 psxMemWrite8_asm:
     srl     $t0, $a0, 16            /* $t0 = t = mem >> 16 */
 
-    /* Check for HW region */
-    andi    $t1, $t0, 0x1F80
-    li      $t2, 0x1F80
-    beq     $t1, $t2, .Lhw_write8
-    andi    $t3, $a0, 0xFFFF        /* $t3 = m (delay slot) */
+    /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
+    QPSX_ASM_HW_CLASSIFY .Lhw_write8
 
     /* RAM path */
     la      $t4, psxMemWLUT
@@ -316,11 +325,8 @@ psxMemRead32_asm:
     nop
 #endif
 
-    /* Check for HW region */
-    andi    $t1, $t0, 0x1F80
-    li      $t2, 0x1F80
-    beq     $t1, $t2, .Lhw_read32
-    andi    $t3, $a0, 0xFFFF        /* $t3 = m (delay slot) */
+    /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
+    QPSX_ASM_HW_CLASSIFY .Lhw_read32
 
     /* RAM/ROM path - use Read LUT */
     la      $t4, psxMemRLUT
@@ -404,10 +410,8 @@ psxMemRead16_asm:
     beq     $t1, $t2, .Lram_read16
     nop
 #endif
-    andi    $t1, $t0, 0x1F80
-    li      $t2, 0x1F80
-    beq     $t1, $t2, .Lhw_read16
-    andi    $t3, $a0, 0xFFFF
+    /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
+    QPSX_ASM_HW_CLASSIFY .Lhw_read16
 
     la      $t4, psxMemRLUT
     sll     $t1, $t0, 2
@@ -487,10 +491,8 @@ psxMemRead8_asm:
     beq     $t1, $t2, .Lram_read8
     nop
 #endif
-    andi    $t1, $t0, 0x1F80
-    li      $t2, 0x1F80
-    beq     $t1, $t2, .Lhw_read8
-    andi    $t3, $a0, 0xFFFF
+    /* Check for exact aliases 0x1f80, 0x9f80, and 0xbf80. */
+    QPSX_ASM_HW_CLASSIFY .Lhw_read8
 
     la      $t4, psxMemRLUT
     sll     $t1, $t0, 2
