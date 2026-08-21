@@ -79,6 +79,9 @@ QPSX_GTE_OPCODE_COUNTER ?= 0
 QPSX_GTE_INTPL_OPTIMIZE ?= 0
 QPSX_GTE_INTPL_COMPACT ?= 0
 QPSX_GTE_RTPT_OS ?= 0
+# Hand-written leaf RTPT kernel for a dedicated no-saturation physical A/B.
+# It is opt-in; normal builds retain the exact C implementation.
+QPSX_GTE_RTPT_ASM_FAST ?= 0
 # Emit one architecturally harmless, uniquely encoded MIPS no-op per
 # retro_run.  QEMU's cache oracle recognizes it as an exact frame boundary;
 # the physical target pays one instruction per frame and tests the identical
@@ -118,6 +121,7 @@ QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_GTE_INTPL_OPTIMIZE=$(QPSX_GTE_INTPL_OPTIMIZE) \
 	-DQPSX_GTE_INTPL_COMPACT=$(QPSX_GTE_INTPL_COMPACT) \
 	-DQPSX_GTE_RTPT_OS=$(QPSX_GTE_RTPT_OS) \
+	-DQPSX_GTE_RTPT_ASM_FAST=$(QPSX_GTE_RTPT_ASM_FAST) \
 	-DQPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS) \
 	-DQPSX_BUILD_TAG=\"$(QPSX_BUILD_TAG)\" \
 	-DQPSX_BUILD_FINGERPRINT=\"$(QPSX_BUILD_FINGERPRINT)\" \
@@ -248,6 +252,7 @@ $(QPSX_CONFIG_STAMP): qpsx-config-force
 		'QPSX_GTE_INTPL_OPTIMIZE=$(QPSX_GTE_INTPL_OPTIMIZE)' \
 		'QPSX_GTE_INTPL_COMPACT=$(QPSX_GTE_INTPL_COMPACT)' \
 		'QPSX_GTE_RTPT_OS=$(QPSX_GTE_RTPT_OS)' \
+		'QPSX_GTE_RTPT_ASM_FAST=$(QPSX_GTE_RTPT_ASM_FAST)' \
 		'QPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS)' \
 		'QPSX_BUILD_TAG=$(QPSX_BUILD_TAG)' \
 		'QPSX_BUILD_FINGERPRINT=$(QPSX_BUILD_FINGERPRINT)' \
@@ -324,6 +329,9 @@ OBJS += \
 	src/psxmem_asm.o
 else ifeq ($(QPSX_MIPS_ASM_MEM_READS), 1)
 OBJS += src/psxmem_asm.o
+endif
+ifeq ($(QPSX_GTE_RTPT_ASM_FAST), 1)
+OBJS += src/gte_rtpt_asm.o
 endif
 # HC15xx-safe MIPS32r2 GPU inner loops (EXT/INS/MOVZ/PREF only, see
 # gpu_inner_mips32.h): built for every MIPS frontend that licenses the safe

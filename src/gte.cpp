@@ -64,6 +64,13 @@
 #define QPSX_GTE_RTPT_OPT QPSX_GTE_HOT
 #endif
 
+#ifndef QPSX_GTE_RTPT_ASM_FAST
+#define QPSX_GTE_RTPT_ASM_FAST 0
+#endif
+#if QPSX_GTE_RTPT_ASM_FAST && defined(__mips__)
+extern "C" void gte_RTPT_asm(void);
+#endif
+
 /* Keep the normal GTE path byte-for-byte free of diagnostic state.  The
  * optional build is intentionally a direct increment in each operation
  * wrapper: unlike cycle/profiler instrumentation it adds no calls, time
@@ -567,6 +574,11 @@ QPSX_GTE_RTPT_OPT void gteRTPT(void) {
 	GTE_LOG("GTE RTPT\n");
 #endif
 	PROFILE_START(PROF_GTE_RTPT);
+	#if QPSX_GTE_RTPT_ASM_FAST && defined(__mips__)
+	gte_RTPT_asm();
+	PROFILE_END(PROF_GTE_RTPT);
+	return;
+	#endif
 	gteFLAG = 0;
 
 	gteSZ0 = gteSZ3;
