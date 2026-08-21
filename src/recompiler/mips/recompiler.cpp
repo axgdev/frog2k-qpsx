@@ -127,6 +127,16 @@ extern "C" void xlog(const char *fmt, ...);
 #define QPSX_MIPS_DISPATCH_BRANCH_LIKELY 0
 #endif
 
+/* Frame completion is a separate branch from the two cache probes above.
+ * Keep its branch-likely form independently selectable: on a simple in-order
+ * MIPS32r1 core, annulling a delay slot can cost more than the single nop it
+ * replaces, while cache probes also move miss-only work out of the hit path.
+ * This split lets the physical benchmark answer that question without
+ * changing the cache-dispatch experiment. */
+#ifndef QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY
+#define QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY 0
+#endif
+
 
 /* Fold a bounded number of short, forward unconditional jumps into the
  * current translated block.  This removes an indirect-dispatch round trip
@@ -1085,7 +1095,7 @@ __asm__ __volatile__ (
 // QPSX_039: Check emu_frame_complete flag - exit if frame is done
 "lw    $t5, f_off_frame_complete($sp)         \n"
 "lw    $t6, 0($t5)                            \n"
-#if QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+#if QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY
 "bnezl $t6, exit%=                            \n" // Annul the common not-taken delay slot
 #else
 "bnez  $t6, exit%=                            \n" // Exit loop if frame complete

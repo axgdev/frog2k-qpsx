@@ -116,6 +116,9 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_MIPS_DISPATCH_BRANCH_LIKELY
 #define QPSX_MIPS_DISPATCH_BRANCH_LIKELY 0
 #endif
+#ifndef QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY
+#define QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY 0
+#endif
 #ifndef QPSX_BUILD_TAG
 #define QPSX_BUILD_TAG "untagged"
 #endif
@@ -130,13 +133,14 @@ psxRegisters psxRegs;
 
 int psxInit() {
 	printf("Running PCSX Version %s (%s).\n", PACKAGE_VERSION, __DATE__);
-	xlog("QPSX: build_id=%s dispatch_cache=%d dispatch_gp=%d dispatch_gp_abi=%d dispatch_bl=%d psxM_reg=%d gte_native_div=%d "
+	xlog("QPSX: build_id=%s dispatch_cache=%d dispatch_gp=%d dispatch_gp_abi=%d dispatch_bl=%d dispatch_frame_bl=%d psxM_reg=%d gte_native_div=%d "
 	     "gte_hot_o3=%d return_ra=%d fold=%d/%d/%d profiler=%d telemetry=%d "
 	     "gpu_fixed=%d gpu_light_fast=%d gpu_linear4=%d gpu_tile32=%d "
 	     "gpu_sprite4=%d gpu_hot_order=%d gpu_metrics=%d mirror=%d fast_mem=%d",
 	     QPSX_BUILD_TAG, QPSX_MIPS_DISPATCH_CACHE_ENTRIES, QPSX_MIPS_DISPATCH_CACHE_GP,
 	     QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI,
 	     QPSX_MIPS_DISPATCH_BRANCH_LIKELY,
+	     QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY,
 	     QPSX_MIPS_PSMEM_REG,
 	     QPSX_GTE_NATIVE_DIVIDE, QPSX_GTE_HOT_O3,
 	     QPSX_MIPS_PERSISTENT_RETURN_RA, QPSX_MIPS_FOLD_DIRECT_JUMPS,
