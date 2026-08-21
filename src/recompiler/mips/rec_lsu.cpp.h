@@ -1070,6 +1070,17 @@ static void general_loads_stores(const int  count,
 						{
 							u32 *label_slow_1 = 0, *label_slow_2 = 0, *label_done = 0;
 							ADDIU(MIPSREG_A0, rs, op_imm);       // eff addr (also the helper arg)
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							/* Exact unsigned interval test: addr - 0x1f800000 < 0x400.
+							 * This replaces two dependent branches with one on the hot
+							 * canonical scratchpad path. Segment aliases keep the helper. */
+							LUI(TEMP_1, 0xe080);
+							ADDU(TEMP_1, MIPSREG_A0, TEMP_1);
+							SLTIU(TEMP_1, TEMP_1, 0x400);
+							label_slow_1 = (u32 *)recMem;
+							BEQZ(TEMP_1, 0);
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);
+#else
 							SRL(TEMP_1, MIPSREG_A0, 16);         // t = addr >> 16
 							XORI(TEMP_1, TEMP_1, 0x1f80);        // t == 0x1f80 ?
 							label_slow_1 = (u32 *)recMem;
@@ -1079,13 +1090,18 @@ static void general_loads_stores(const int  count,
 							label_slow_2 = (u32 *)recMem;
 							BEQZ(TEMP_3, 0);                     // hardware regs -> helper
 							LUI(TEMP_3, ADR_HI((uptr)psxH));     // <BD> psxH high half
+#endif
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							LUI(TEMP_3, ADR_HI((uptr)psxH));
+#endif
 							ADDU(TEMP_3, TEMP_3, TEMP_2);         // psxH + m
 							LSU_OPCODE(0xac000000, rt, TEMP_3, ADR_LO((uptr)psxH)); // SW rt, lo(psxH)(temp_3)
 							label_done = (u32 *)recMem;
 							B(0);                                // b done
 							NOP();                               // <BD>
 							fixup_branch(label_slow_1);
-							fixup_branch(label_slow_2);
+							if (label_slow_2)
+								fixup_branch(label_slow_2);
 						/* The preceding tests prove a real 0x1f80xxxx hardware
 						 * address (not scratchpad).  Bypass psxMemWrite32's
 						 * duplicate region/LUT dispatch; psxHwWrite32 also handles
@@ -1219,6 +1235,14 @@ static void general_loads_stores(const int  count,
 						{
 							u32 *label_slow_1 = 0, *label_slow_2 = 0, *label_done = 0;
 							ADDIU(MIPSREG_A0, rs, op_imm);       // eff addr (also the helper arg)
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							LUI(TEMP_1, 0xe080);
+							ADDU(TEMP_1, MIPSREG_A0, TEMP_1);
+							SLTIU(TEMP_1, TEMP_1, 0x400);
+							label_slow_1 = (u32 *)recMem;
+							BEQZ(TEMP_1, 0);
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);
+#else
 							SRL(TEMP_1, MIPSREG_A0, 16);         // t = addr >> 16
 							XORI(TEMP_1, TEMP_1, 0x1f80);        // t == 0x1f80 ?
 							label_slow_1 = (u32 *)recMem;
@@ -1228,13 +1252,18 @@ static void general_loads_stores(const int  count,
 							label_slow_2 = (u32 *)recMem;
 							BEQZ(TEMP_3, 0);                     // hardware regs -> helper
 							LUI(TEMP_3, ADR_HI((uptr)psxH));     // <BD> psxH high half
+#endif
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							LUI(TEMP_3, ADR_HI((uptr)psxH));
+#endif
 							ADDU(TEMP_3, TEMP_3, TEMP_2);         // psxH + m
 							LSU_OPCODE(0x8c000000, rt, TEMP_3, ADR_LO((uptr)psxH)); // LW rt, lo(psxH)(temp_3)
 							label_done = (u32 *)recMem;
 							B(0);                                // b done
 							NOP();                               // <BD>
 							fixup_branch(label_slow_1);
-							fixup_branch(label_slow_2);
+							if (label_slow_2)
+								fixup_branch(label_slow_2);
 							/* As in the SW path, this is known 0x1f80xxxx
 							 * hardware, so avoid psxMemRead32's second region
 							 * dispatch and LUT lookup. */
