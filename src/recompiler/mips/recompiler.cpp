@@ -149,16 +149,16 @@ static uptr psxRecLUT[0x10000];
 /*
  * The NOMMU Linux port cannot mirror recRAM into the guest address space, so
  * every block dispatch otherwise reads both psxRecLUT and a widely scattered
- * recRAM slot. Keep recent PC-to-host-code translations in one HC15xx cache
- * line. recClear() and recReset() invalidate it alongside the authoritative
- * block-pointer arrays.
+ * recRAM slot. Keep recent PC-to-host-code translations in four HC15xx cache
+ * lines (512 bytes, at most 3.1% of a 16 KiB D-cache). recClear() and
+ * recReset() invalidate it alongside the authoritative block-pointer arrays.
  */
 struct rec_dispatch_entry {
 	u32 pc;
 	u32 code;
 };
 
-static struct rec_dispatch_entry rec_dispatch_cache[16]
+static struct rec_dispatch_entry rec_dispatch_cache[64]
 	__attribute__((aligned(128)));
 
 static inline void rec_dispatch_cache_clear()
@@ -175,7 +175,24 @@ static inline void rec_dispatch_cache_clear()
 #undef PC_REC8
 #undef PC_REC16
 #undef PC_REC32
+#if defined(QPSX_LINUX_ALLOCATED_RAM) && QPSX_LINUX_ALLOCATED_RAM
+/*
+ * NOMMU cannot create the virtual recRAM mirrors used by the original fast
+ * path, but malloc() still gives recRAM and recROM exactly the same linear
+ * layout.  Fold RAM mirrors with a mask and select the BIOS array directly;
+ * this is equivalent to psxRecLUT without touching its 256 KiB table.
+ */
+static inline uptr rec_allocated_slot(u32 pc)
+{
+	if ((pc & 0xfff80000u) == 0xbfc00000u)
+		return (uptr)recROM + ((pc & 0x0007ffffu) * (REC_RAM_PTR_SIZE / 4));
+
+	return (uptr)recRAM + ((pc & 0x001fffffu) * (REC_RAM_PTR_SIZE / 4));
+}
+#define PC_REC(x)	rec_allocated_slot(x)
+#else
 #define PC_REC(x)	((uptr)psxRecLUT[(x) >> 16] + (((x) & 0xffff) * (REC_RAM_PTR_SIZE / 4)))
+#endif
 #define PC_REC8(x)	(*(u8 *)PC_REC(x))
 #define PC_REC16(x)	(*(u16*)PC_REC(x))
 #define PC_REC32(x)	(*(u32*)PC_REC(x))
@@ -732,7 +749,7 @@ __attribute__((noinline)) static void recFunc(void *fn)
 
 /* Execute blocks starting at psxRegs.pc
  * Blocks return indirectly, to address stored at 16($sp)
- * Block pointers are looked up using psxRecLUT[].
+ * Block pointers are cached, then addressed directly in allocated recRAM.
  * Called only from recExecute(), see notes there.
  *
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
@@ -779,20 +796,22 @@ __asm__ __volatile__ (
 
 // Set up our own stack frame. Should have 8-byte alignment, and have 16 bytes
 // empty at 0($sp) for use by functions called from within recompiled code.
-".equ  frame_size,                  48        \n"
+".equ  frame_size,                  56        \n"
 ".equ  f_off_temp_var1,             20        \n"
 ".equ  f_off_block_ret_addr,        16        \n" // NOTE: blocks assume this is at 16($sp)!
 ".equ  f_off_recRecompile,           24        \n"
 ".equ  f_off_psxBranchTest,          28        \n"
 ".equ  f_off_frame_complete,         32        \n"
-".equ  f_off_psxRecLUT,              36        \n"
-".equ  f_off_dispatch_cache,         40        \n"
-".equ  f_off_temp_cache_entry,       44        \n"
+".equ  f_off_recRAM,                 36        \n"
+".equ  f_off_recROM,                 40        \n"
+".equ  f_off_dispatch_cache,         44        \n"
+".equ  f_off_temp_cache_entry,       48        \n"
 "addiu $sp, $sp, -frame_size                  \n"
 "sw    %[recRecompile], f_off_recRecompile($sp) \n"
 "sw    %[psxBranchTest], f_off_psxBranchTest($sp) \n"
 "sw    %[emu_frame_complete], f_off_frame_complete($sp) \n"
-"sw    %[psxRecLUT], f_off_psxRecLUT($sp)     \n"
+"sw    %[recRAM], f_off_recRAM($sp)           \n"
+"sw    %[recROM], f_off_recROM($sp)           \n"
 "sw    %[dispatch_cache], f_off_dispatch_cache($sp) \n"
 
 // Derive the local return address without an absolute text relocation.
@@ -824,7 +843,7 @@ __asm__ __volatile__ (
 // The loop pseudocode is this, interleaving ops to reduce load stalls:
 //
 // loop:
-// $t0 = cached host code for psxRegs.pc, falling back to psxRecLUT/recRAM
+// $t0 = cached host code for psxRegs.pc, falling back to direct recRAM/recROM
 // psxRegs.cycle += $v1
 // if (psxRegs.cycle >= psxRegs.io_cycle_counter)
 //    goto call_psxBranchTest;
@@ -839,7 +858,7 @@ __asm__ __volatile__ (
 // Infinite loop, blocks return here
 "loop%=:                                      \n"
 "lw    $t3, %[psxRegs_cycle_off]($fp)         \n" // $t3 = psxRegs.cycle
-"andi  $t2, $v0, 0x003c                       \n" // 16-entry cache index
+"andi  $t2, $v0, 0x00fc                       \n" // 64-entry cache index
 "sll   $t2, $t2, 1                            \n" // eight bytes per entry
 "lw    $t1, f_off_dispatch_cache($sp)         \n"
 "addu  $t6, $t1, $t2                          \n" // $t6 = cache entry
@@ -869,15 +888,23 @@ __asm__ __volatile__ (
 "jr    $t0                                    \n"
 "lw    $ra, 16($sp)                           \n" // <BD> Load block return address
 
-// Cache miss: use the authoritative two-level LUT and fill the cache entry.
+// Cache miss: derive the authoritative recRAM/recROM slot arithmetically.
+// Valid RAM PCs have bit 27 clear; the 0xbfc00000 BIOS region has it set.
+// Shift pairs mask to the 2 MiB RAM or 512 KiB ROM allocation respectively.
 "dispatch_cache_miss%=:                       \n"
-"srl   $t2, $v0, 16                           \n"
-"sll   $t2, $t2, 2                            \n" // sizeof() psxRecLUT[] elements is 4
-"lw    $t1, f_off_psxRecLUT($sp)              \n"
-"addu  $t1, $t1, $t2                          \n"
-"lw    $t1, 0($t1)                            \n" // $t1 = psxRecLUT[psxRegs.pc >> 16]
-"andi  $t0, $v0, 0xffff                       \n"
-"addu  $t2, $t0, $t1                          \n"
+"sll   $t1, $v0, 4                            \n"
+"bltz  $t1, dispatch_cache_miss_rom%=         \n"
+"sll   $t2, $v0, 11                           \n" // <BD> discard bits above RAM offset
+"srl   $t2, $t2, 11                           \n" // $t2 = pc & 0x001fffff
+"lw    $t1, f_off_recRAM($sp)                 \n"
+"b     dispatch_cache_slot_ready%=            \n"
+"addu  $t2, $t2, $t1                          \n" // <BD> $t2 = &recRAM[pc & 0x1fffff]
+"dispatch_cache_miss_rom%=:                   \n"
+"sll   $t2, $v0, 13                           \n"
+"srl   $t2, $t2, 13                           \n" // $t2 = pc & 0x0007ffff
+"lw    $t1, f_off_recROM($sp)                 \n"
+"addu  $t2, $t2, $t1                          \n" // $t2 = &recROM[pc & 0x7ffff]
+"dispatch_cache_slot_ready%=:                 \n"
 "lw    $t0, 0($t2)                            \n" // $t0 = address of start of block code, or
                                                   //       or 0 if block needs recompilation
                                                   // IMPORTANT: leave block ptr in $t2, it gets
@@ -936,7 +963,8 @@ __asm__ __volatile__ (
   [psxRegs_io_cycle_ctr_off]   "i" (off(io_cycle_counter)),
   [recRecompile]               "d" (&recRecompile),
   [psxBranchTest]              "d" (&psxBranchTest),
-  [psxRecLUT]                  "d" (psxRecLUT),
+  [recRAM]                     "d" (recRAM),
+  [recROM]                     "d" (recROM),
   [dispatch_cache]             "d" (rec_dispatch_cache),
   [emu_frame_complete]         "d" (&emu_frame_complete)
 : // Clobber - No need to list anything but 'saved' regs
@@ -1578,7 +1606,123 @@ __attribute__((noinline)) static void recExecuteBlock(unsigned target_pc)
 	// Set block_ret_addr to 0, so generated code uses indirect returns
 	block_ret_addr = block_fast_ret_addr = 0;
 
-#ifndef ASM_EXECUTE_LOOP
+#if defined(QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH) && \
+    QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH
+	/*
+	 * HLE softcalls may nest this dispatcher inside recExecute(), so blocks
+	 * must still return through the address at 16($sp).  Keep that property,
+	 * but save the ABI register set once per softcall instead of entering the
+	 * recFunc() trampoline for every guest block.
+	 */
+	__asm__ __volatile__ (
+		".set push                                      \n"
+		".set noreorder                                 \n"
+
+		".equ  block_frame_size,              48        \n"
+		".equ  block_off_return,              16        \n"
+		".equ  block_off_target_pc,           20        \n"
+		".equ  block_off_temp_slot,           24        \n"
+		".equ  block_off_recRecompile,        28        \n"
+		".equ  block_off_psxBranchTest,       32        \n"
+		".equ  block_off_recRAM,              36        \n"
+		".equ  block_off_recROM,              40        \n"
+		"addiu $sp, $sp, -block_frame_size              \n"
+		"sw    %[target_pc], block_off_target_pc($sp)   \n"
+		"sw    %[recRecompile], block_off_recRecompile($sp) \n"
+		"sw    %[psxBranchTest], block_off_psxBranchTest($sp) \n"
+		"sw    %[recRAM], block_off_recRAM($sp)         \n"
+		"sw    %[recROM], block_off_recROM($sp)         \n"
+		"move  $fp, %[psxRegs]                          \n"
+
+		// Derive the nested dispatcher's return address without a text relocation.
+		"bal   block_setup_return%=                     \n"
+		"nop                                             \n"
+		"block_setup_return%=:                          \n"
+		"addiu $t0, $ra, block_return%=-block_setup_return%= \n"
+		"sw    $t0, block_off_return($sp)               \n"
+
+		// A C do/while executes the initial PC before testing target_pc.
+		"lw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"b     block_lookup%=                           \n"
+		"move  $v1, $0                                  \n"
+
+		// Generated blocks return here with the next PC in $v0 and cycles in $v1.
+		".balign 32                                     \n"
+		"block_return%=:                                \n"
+		"lw    $t3, %[psxRegs_cycle_off]($fp)           \n"
+		"lw    $t4, %[psxRegs_io_cycle_ctr_off]($fp)    \n"
+		"addu  $t3, $t3, $v1                            \n"
+		"sltu  $t4, $t3, $t4                            \n"
+		"beqz  $t4, block_branch_test%=                 \n"
+		"sw    $t3, %[psxRegs_cycle_off]($fp)           \n"
+		"sw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"lw    $t5, block_off_target_pc($sp)            \n"
+		"beq   $v0, $t5, block_exit%=                   \n"
+		"nop                                             \n"
+		"b     block_lookup%=                           \n"
+		"move  $v1, $0                                  \n"
+
+		// Preserve the C path's target_pc==0 rule: return after the first IRQ test.
+		"block_branch_test%=:                           \n"
+		"sw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"lw    $t9, block_off_psxBranchTest($sp)        \n"
+		"jalr  $t9                                      \n"
+		"nop                                             \n"
+		"lw    $t5, block_off_target_pc($sp)            \n"
+		"beqz  $t5, block_exit%=                        \n"
+		"lw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"bne   $v0, $t5, block_lookup%=                 \n"
+		"move  $v1, $0                                  \n"
+		"b     block_exit%=                             \n"
+		"nop                                             \n"
+
+		// Fold the guest RAM mirrors or select the BIOS block-pointer allocation.
+		"block_lookup%=:                                \n"
+		"sll   $t1, $v0, 4                              \n"
+		"bltz  $t1, block_lookup_rom%=                  \n"
+		"sll   $t2, $v0, 11                             \n"
+		"srl   $t2, $t2, 11                             \n"
+		"lw    $t1, block_off_recRAM($sp)               \n"
+		"b     block_slot_ready%=                       \n"
+		"addu  $t2, $t2, $t1                            \n"
+		"block_lookup_rom%=:                            \n"
+		"sll   $t2, $v0, 13                             \n"
+		"srl   $t2, $t2, 13                             \n"
+		"lw    $t1, block_off_recROM($sp)               \n"
+		"addu  $t2, $t2, $t1                            \n"
+		"block_slot_ready%=:                            \n"
+		"lw    $t0, 0($t2)                              \n"
+		"beqz  $t0, block_recompile%=                   \n"
+		"nop                                             \n"
+		"block_execute%=:                               \n"
+		"jr    $t0                                      \n"
+		"lw    $ra, block_off_return($sp)               \n"
+
+		"block_recompile%=:                             \n"
+		"lw    $t9, block_off_recRecompile($sp)         \n"
+		"jalr  $t9                                      \n"
+		"sw    $t2, block_off_temp_slot($sp)            \n"
+		"lw    $t2, block_off_temp_slot($sp)            \n"
+		"lw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"b     block_execute%=                          \n"
+		"lw    $t0, 0($t2)                              \n"
+
+		"block_exit%=:                                  \n"
+		"addiu $sp, $sp, block_frame_size               \n"
+		".set pop                                       \n"
+		:
+		: [target_pc]                "d" (target_pc),
+		  [psxRegs]                  "d" (&psxRegs),
+		  [psxRegs_pc_off]           "i" (off(pc)),
+		  [psxRegs_cycle_off]        "i" (off(cycle)),
+		  [psxRegs_io_cycle_ctr_off] "i" (off(io_cycle_counter)),
+		  [recRecompile]             "d" (&recRecompile),
+		  [psxBranchTest]            "d" (&psxBranchTest),
+		  [recRAM]                   "d" (recRAM),
+		  [recROM]                   "d" (recROM)
+		: "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "fp", "ra", "memory"
+	);
+#elif !defined(ASM_EXECUTE_LOOP)
 	static unsigned int block_count = 0;
 	static unsigned int last_pc = 0;
 	static unsigned int branch_test_count = 0;
