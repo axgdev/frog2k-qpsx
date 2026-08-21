@@ -109,6 +109,22 @@ static void qpsx_gpu_log_metrics(void)
                     sizeof(qpsx_gpu_pixel_hist) / sizeof(qpsx_gpu_pixel_hist[0]));
   qpsx_gpu_log_hist("tile", qpsx_gpu_tile_hist,
                     sizeof(qpsx_gpu_tile_hist) / sizeof(qpsx_gpu_tile_hist[0]));
+  qpsx_gpu_log_hist("poly_spans", qpsx_gpu_poly_span_hist,
+                    sizeof(qpsx_gpu_poly_span_hist) /
+                    sizeof(qpsx_gpu_poly_span_hist[0]));
+  qpsx_gpu_log_hist("poly_pixels", qpsx_gpu_poly_pixel_hist,
+                    sizeof(qpsx_gpu_poly_pixel_hist) /
+                    sizeof(qpsx_gpu_poly_pixel_hist[0]));
+  qpsx_gpu_log_hist("sprite_pixels", qpsx_gpu_sprite_pixel_hist,
+                    sizeof(qpsx_gpu_sprite_pixel_hist) /
+                    sizeof(qpsx_gpu_sprite_pixel_hist[0]));
+  qpsx_gpu_log_hist("tile_pixels", qpsx_gpu_tile_pixel_hist,
+                    sizeof(qpsx_gpu_tile_pixel_hist) /
+                    sizeof(qpsx_gpu_tile_pixel_hist[0]));
+  GPUIF_LOG("GPU texture metrics fullmask=%u/%u unit_u=%u/%u flat_v=%u/%u",
+            qpsx_gpu_poly_fullmask_spans, qpsx_gpu_poly_fullmask_pixels,
+            qpsx_gpu_poly_unit_u_spans, qpsx_gpu_poly_unit_u_pixels,
+            qpsx_gpu_poly_flat_v_spans, qpsx_gpu_poly_flat_v_pixels);
 }
 
 extern "C" void renderer_log_metrics(void)
@@ -126,6 +142,16 @@ int renderer_init(void)
   memset(qpsx_gpu_sprite_hist, 0, sizeof(qpsx_gpu_sprite_hist));
   memset(qpsx_gpu_pixel_hist, 0, sizeof(qpsx_gpu_pixel_hist));
   memset(qpsx_gpu_tile_hist, 0, sizeof(qpsx_gpu_tile_hist));
+  memset(qpsx_gpu_poly_span_hist, 0, sizeof(qpsx_gpu_poly_span_hist));
+  memset(qpsx_gpu_poly_pixel_hist, 0, sizeof(qpsx_gpu_poly_pixel_hist));
+  memset(qpsx_gpu_sprite_pixel_hist, 0, sizeof(qpsx_gpu_sprite_pixel_hist));
+  memset(qpsx_gpu_tile_pixel_hist, 0, sizeof(qpsx_gpu_tile_pixel_hist));
+  qpsx_gpu_poly_fullmask_spans = 0;
+  qpsx_gpu_poly_fullmask_pixels = 0;
+  qpsx_gpu_poly_unit_u_spans = 0;
+  qpsx_gpu_poly_unit_u_pixels = 0;
+  qpsx_gpu_poly_flat_v_spans = 0;
+  qpsx_gpu_poly_flat_v_pixels = 0;
 #endif
 
   GPUIF_LOG("memset gpu_unai (%d bytes)...", (int)sizeof(gpu_unai));
