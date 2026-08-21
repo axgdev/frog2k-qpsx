@@ -20,6 +20,9 @@
 #ifndef QPSX_GPU_DMA_CHAIN_FAST
 #define QPSX_GPU_DMA_CHAIN_FAST 0
 #endif
+#if QPSX_GPU_DMA_CHAIN_FAST
+#include "gpu_dma_chain_fast.h"
+#endif
 /* SF2000 xlog debugging */
 #ifdef SF2000
 extern "C" {
@@ -713,7 +716,8 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
    * state, not gpulib's status or fb_dirty fields.  The latter are only
    * exposed after this call (GPU_readStatus/GPU_updateLace), so publication
    * may be deferred across ordinary nodes. */
-  chain_fast = (gpu.cmd_len == 0 && !gpu.frameskip.active && !gpu.dma.h);
+  chain_fast = qpsx_gpu_dma_chain_can_fast(
+    gpu.cmd_len, gpu.frameskip.active, gpu.dma.h);
   chain_old_e3 = gpu.ex_regs[3];
 #endif
 

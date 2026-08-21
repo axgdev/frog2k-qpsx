@@ -16,11 +16,8 @@ void qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3)
     /* Keep this expression identical to gpu.cpp's static
      * decide_frameskip_allow(). It is out-of-line here only to keep the
      * optional finalizer independent of gpu.o's text layout. */
-    uint32_t cmd_e3 = gpu.ex_regs[3];
-    uint32_t x = cmd_e3 & 0x3ff;
-    uint32_t y = (cmd_e3 >> 10) & 0x3ff;
-    gpu.frameskip.allow = gpu.status.interlace ||
-      (uint32_t)(x - gpu.screen.x) >= (uint32_t)gpu.screen.w ||
-      (uint32_t)(y - gpu.screen.y) >= (uint32_t)gpu.screen.h;
+    gpu.frameskip.allow = qpsx_gpu_frameskip_allow_value(
+      gpu.status.interlace, gpu.ex_regs[3], gpu.screen.x, gpu.screen.y,
+      gpu.screen.w, gpu.screen.h);
   }
 }
