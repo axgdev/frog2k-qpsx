@@ -27,6 +27,9 @@
 #ifndef QPSX_GTE_INTPL_OPTIMIZE
 #define QPSX_GTE_INTPL_OPTIMIZE 0
 #endif
+#ifndef QPSX_GTE_INTPL_COMPACT
+#define QPSX_GTE_INTPL_COMPACT 0
+#endif
 
 void gteMFC2(void);
 void gteCFC2(void);
@@ -45,6 +48,10 @@ void gteINTPL_s0_l0(void);
 void gteINTPL_s0_l1(void);
 void gteINTPL_s1_l0(void);
 void gteINTPL_s1_l1(void);
+#endif
+#if QPSX_GTE_INTPL_COMPACT
+void gteINTPL_s0_compact(u32 gteop);
+void gteINTPL_s1_compact(u32 gteop);
 #endif
 void gteMVMVA(u32 gteop);
 void gteNCDS(void);

@@ -1098,6 +1098,37 @@ __attribute__((optimize("O3"), hot))
 void gteINTPL_s1_l1(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<12, 1>(); }
 #endif
 
+#if QPSX_GTE_INTPL_COMPACT
+/* Compact variant: specialize only SF (the expensive shift), while keeping
+ * LM as an opcode argument.  This preserves exact semantics with two small
+ * bodies instead of four separately generated SF/LM combinations. */
+template<int SHIFT>
+static void gteINTPL_compact(u32 gteop) {
+	const int lm = GTE_LM(gteop);
+	gteFLAG = 0;
+	gteMAC1 = ((gteIR1 * 4096) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> SHIFT;
+	gteMAC2 = ((gteIR2 * 4096) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> SHIFT;
+	gteMAC3 = ((gteIR3 * 4096) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> SHIFT;
+	gteIR1 = limB1(gteMAC1, lm);
+	gteIR2 = limB2(gteMAC2, lm);
+	gteIR3 = limB3(gteMAC3, lm);
+	gteRGB0 = gteRGB1;
+	gteRGB1 = gteRGB2;
+	gteCODE2 = gteCODE;
+	gteR2 = limC1(gteMAC1 >> 4);
+	gteG2 = limC2(gteMAC2 >> 4);
+	gteB2 = limC3(gteMAC3 >> 4);
+}
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s0_compact(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_compact<0>(gteop);
+}
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s1_compact(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_compact<12>(gteop);
+}
+#endif
+
 void gteINTPL(u32 gteop) {
 	QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL);
 	int shift = 12 * GTE_SF(gteop);

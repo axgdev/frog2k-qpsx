@@ -81,6 +81,17 @@ static void recINTPL()
 	}
 	NOP();
 }
+#elif QPSX_GTE_INTPL_COMPACT
+extern void gteINTPL_s0_compact(u32 gteop);
+extern void gteINTPL_s1_compact(u32 gteop);
+static void recINTPL()
+{
+	if ((psxRegs.code >> 19) & 1)
+		JAL(gteINTPL_s1_compact);
+	else
+		JAL(gteINTPL_s0_compact);
+	LI16(MIPSREG_A0, (u16)(psxRegs.code >> 10));
+}
 #else
 CP2_FUNC_1(INTPL)
 #endif
