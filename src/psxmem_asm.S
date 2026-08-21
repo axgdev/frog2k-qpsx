@@ -38,6 +38,7 @@
  *--------------------------------------------------------------------------*/
     .extern psxMemWLUT
     .extern psxMemRLUT
+    .extern psxM
     .extern psxH
     .extern psxHwWrite32
     .extern psxHwWrite16
@@ -290,6 +291,21 @@ psxMemWrite8_asm:
 psxMemRead32_asm:
     srl     $t0, $a0, 16            /* $t0 = t = mem >> 16 */
 
+#if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+    /* Linux keeps the PS1 RAM in one stable 2 MiB object.  The 8 MiB
+     * KUSEG/KSEG0/KSEG1 mirror can therefore skip the read LUT entirely. */
+    andi    $t3, $a0, 0xFFFF        /* m = mem & 0xffff */
+    srl     $t1, $t0, 7             /* high16 >> 7: 0, 0x100, or 0x140 */
+    beq     $t1, $zero, .Lram_read32
+    nop
+    li      $t2, 0x100
+    beq     $t1, $t2, .Lram_read32
+    nop
+    li      $t2, 0x140
+    beq     $t1, $t2, .Lram_read32
+    nop
+#endif
+
     /* Check for HW region */
     andi    $t1, $t0, 0x1F80
     li      $t2, 0x1F80
@@ -310,6 +326,18 @@ psxMemRead32_asm:
     lw      $v0, 0($t5)             /* $v0 = *(u32*)(p + m) */
     jr      $ra
     nop
+
+#if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+.Lram_read32:
+    la      $t4, psxM
+    lw      $t4, 0($t4)              /* t4 = psxM base */
+    sll     $t5, $a0, 11             /* keep the low 21 address bits */
+    srl     $t5, $t5, 11
+    addu    $t4, $t4, $t5
+    lw      $v0, 0($t4)
+    jr      $ra
+    nop
+#endif
 
 .Lhw_read32:
     /* Check if scratchpad: m < 0x400 */
@@ -348,6 +376,18 @@ psxMemRead32_asm:
 
 psxMemRead16_asm:
     srl     $t0, $a0, 16
+#if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+    andi    $t3, $a0, 0xFFFF
+    srl     $t1, $t0, 7
+    beq     $t1, $zero, .Lram_read16
+    nop
+    li      $t2, 0x100
+    beq     $t1, $t2, .Lram_read16
+    nop
+    li      $t2, 0x140
+    beq     $t1, $t2, .Lram_read16
+    nop
+#endif
     andi    $t1, $t0, 0x1F80
     li      $t2, 0x1F80
     beq     $t1, $t2, .Lhw_read16
@@ -365,6 +405,18 @@ psxMemRead16_asm:
     lhu     $v0, 0($t5)
     jr      $ra
     nop
+
+#if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+.Lram_read16:
+    la      $t4, psxM
+    lw      $t4, 0($t4)
+    sll     $t5, $a0, 11
+    srl     $t5, $t5, 11
+    addu    $t4, $t4, $t5
+    lhu     $v0, 0($t4)
+    jr      $ra
+    nop
+#endif
 
 .Lhw_read16:
     sltiu   $t1, $t3, 0x400
@@ -401,6 +453,18 @@ psxMemRead16_asm:
 
 psxMemRead8_asm:
     srl     $t0, $a0, 16
+#if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+    andi    $t3, $a0, 0xFFFF
+    srl     $t1, $t0, 7
+    beq     $t1, $zero, .Lram_read8
+    nop
+    li      $t2, 0x100
+    beq     $t1, $t2, .Lram_read8
+    nop
+    li      $t2, 0x140
+    beq     $t1, $t2, .Lram_read8
+    nop
+#endif
     andi    $t1, $t0, 0x1F80
     li      $t2, 0x1F80
     beq     $t1, $t2, .Lhw_read8
@@ -418,6 +482,18 @@ psxMemRead8_asm:
     lbu     $v0, 0($t5)
     jr      $ra
     nop
+
+#if defined(QPSX_LINUX_RAM_HELPER_FASTPATH) && QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+.Lram_read8:
+    la      $t4, psxM
+    lw      $t4, 0($t4)
+    sll     $t5, $a0, 11
+    srl     $t5, $t5, 11
+    addu    $t4, $t4, $t5
+    lbu     $v0, 0($t4)
+    jr      $ra
+    nop
+#endif
 
 .Lhw_read8:
     sltiu   $t1, $t3, 0x400

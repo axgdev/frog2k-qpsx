@@ -407,7 +407,12 @@ void gpuSendPacketFunction(const int PRIM)
 				// Index MSB selects Gouraud-shaded PixelSpanDriver:
 				driver_idx |= (1 << 5);
 				PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
+				#if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+				gpuDrawLineG(packet, driver,
+					QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+				#else
 				gpuDrawLineG(packet, driver);
+				#endif
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawLineG(0x%x)\n",PRIM));
 			}
@@ -429,7 +434,12 @@ void gpuSendPacketFunction(const int PRIM)
 				// Index MSB selects Gouraud-shaded PixelSpanDriver:
 				driver_idx |= (1 << 5);
 				PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
+				#if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+				gpuDrawLineG(packet, driver,
+					QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+				#else
 				gpuDrawLineG(packet, driver);
+				#endif
 				gpu_unai.fb_dirty = true;
 				DO_LOG(("gpuDrawLineG(0x%x)\n",PRIM));
 			}

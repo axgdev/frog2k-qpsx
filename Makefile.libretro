@@ -29,6 +29,13 @@ QPSX_OPTIMIZE ?= -O2
 # this empty by default: the recompiler, GTE, memory and audio code are much
 # more sensitive to -O2 scheduling than the large generated GPU driver.
 QPSX_GPU_OPTIMIZE ?=
+# Bypass the dynamic RAM LUT in the C helper for PS1's 8 MiB mirrored window.
+# Leave this an explicit A/B knob because the extra range check also enlarges
+# the helper text in the tiny target I-cache.
+QPSX_LINUX_RAM_HELPER_FASTPATH ?= 0
+QPSX_MIPS_ASM_MEM_READS ?= 0
+QPSX_HLE_LAZY_EVENT_CHECK ?= 0
+QPSX_GPU_GOURAUD_LINE_FLATFAST ?= 0
 
 QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_PLATFORM_UNIFROG=$(QPSX_PLATFORM_UNIFROG) \
@@ -36,6 +43,10 @@ QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_ENABLE_MIPS_DIRECT_MEM=1 \
 	-DQPSX_ENABLE_MIPS_LSU_CACHING=1 \
 	-DQPSX_ENABLE_MIPS_CONST_MEM=1 \
+	-DQPSX_LINUX_RAM_HELPER_FASTPATH=$(QPSX_LINUX_RAM_HELPER_FASTPATH) \
+	-DQPSX_MIPS_ASM_MEM_READS=$(QPSX_MIPS_ASM_MEM_READS) \
+	-DQPSX_HLE_LAZY_EVENT_CHECK=$(QPSX_HLE_LAZY_EVENT_CHECK) \
+	-DQPSX_GPU_GOURAUD_LINE_FLATFAST=$(QPSX_GPU_GOURAUD_LINE_FLATFAST) \
 	-DQPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)
 ifeq ($(QPSX_PLATFORM),linux)
 QPSX_PLATFORM_CFLAGS += \
@@ -142,6 +153,10 @@ $(QPSX_CONFIG_STAMP): qpsx-config-force
 	{ printf '%s\n' \
 		'QPSX_PLATFORM=$(QPSX_PLATFORM)' \
 		'QPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)' \
+		'QPSX_LINUX_RAM_HELPER_FASTPATH=$(QPSX_LINUX_RAM_HELPER_FASTPATH)' \
+		'QPSX_MIPS_ASM_MEM_READS=$(QPSX_MIPS_ASM_MEM_READS)' \
+		'QPSX_HLE_LAZY_EVENT_CHECK=$(QPSX_HLE_LAZY_EVENT_CHECK)' \
+		'QPSX_GPU_GOURAUD_LINE_FLATFAST=$(QPSX_GPU_GOURAUD_LINE_FLATFAST)' \
 		'CC=$(CC)' 'CXX=$(CXX)' 'AR=$(AR)'; \
 	} > "$$tmp"; \
 	if ! cmp -s "$$tmp" '$@' 2>/dev/null; then \
@@ -199,6 +214,8 @@ ifeq ($(platform), sf2000)
 OBJS += \
 	src/gte_asm.o \
 	src/psxmem_asm.o
+else ifeq ($(QPSX_MIPS_ASM_MEM_READS), 1)
+OBJS += src/psxmem_asm.o
 endif
 # HC15xx-safe MIPS32r2 GPU inner loops (EXT/INS/MOVZ/PREF only, see
 # gpu_inner_mips32.h): built for every MIPS frontend that licenses the safe

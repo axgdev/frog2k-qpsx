@@ -125,6 +125,8 @@ static void qpsx_gpu_log_metrics(void)
             qpsx_gpu_poly_fullmask_spans, qpsx_gpu_poly_fullmask_pixels,
             qpsx_gpu_poly_unit_u_spans, qpsx_gpu_poly_unit_u_pixels,
             qpsx_gpu_poly_flat_v_spans, qpsx_gpu_poly_flat_v_pixels);
+  GPUIF_LOG("GPU line metrics gouraud=%u flatfast=%u",
+            qpsx_gpu_line_g_total, qpsx_gpu_line_g_flatfast);
 }
 
 extern "C" void renderer_log_metrics(void)
@@ -152,6 +154,8 @@ int renderer_init(void)
   qpsx_gpu_poly_unit_u_pixels = 0;
   qpsx_gpu_poly_flat_v_spans = 0;
   qpsx_gpu_poly_flat_v_pixels = 0;
+  qpsx_gpu_line_g_total = 0;
+  qpsx_gpu_line_g_flatfast = 0;
 #endif
 
   GPUIF_LOG("memset gpu_unai (%d bytes)...", (int)sizeof(gpu_unai));
@@ -547,7 +551,12 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         // Index MSB selects Gouraud-shaded PixelSpanDriver:
         driver_idx |= (1 << 5);
         PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
+        #if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+        gpuDrawLineG(packet, driver,
+                     QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+        #else
         gpuDrawLineG(packet, driver);
+        #endif
       } break;
 
       case 0x58 ... 0x5F: { // Gouraud-shaded line strip
@@ -559,7 +568,12 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         // Index MSB selects Gouraud-shaded PixelSpanDriver:
         driver_idx |= (1 << 5);
         PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
+        #if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+        gpuDrawLineG(packet, driver,
+                     QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+        #else
         gpuDrawLineG(packet, driver);
+        #endif
 
         while(1)
         {
@@ -567,7 +581,12 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
           gpu_unai.PacketBuffer.U4[1] = gpu_unai.PacketBuffer.U4[3];
           gpu_unai.PacketBuffer.U4[2] = *list_position++;
           gpu_unai.PacketBuffer.U4[3] = *list_position++;
+          #if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+          gpuDrawLineG(packet, driver,
+                       QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+          #else
           gpuDrawLineG(packet, driver);
+          #endif
 
           num_vertexes++;
           if(list_position >= list_end) {

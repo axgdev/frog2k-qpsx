@@ -24,10 +24,28 @@
 
 #include "psxhle.h"
 
+#ifndef QPSX_HLE_LAZY_EVENT_CHECK
+#define QPSX_HLE_LAZY_EVENT_CHECK 0
+#endif
+
+/* The MIPS recompiler checks io_cycle_counter immediately after every HLE
+ * block returns. Most BIOS calls therefore do not need to enter the full
+ * event dispatcher a second time; retain the call only when an event or an
+ * interrupt has made the counter due. */
+static inline void hleBranchTestIfDue(void)
+{
+	#if QPSX_HLE_LAZY_EVENT_CHECK
+	if (psxRegs.cycle >= psxRegs.io_cycle_counter)
+		psxBranchTest();
+	#else
+	psxBranchTest();
+	#endif
+}
+
 static void hleDummy(void) {
 	psxRegs.pc = psxRegs.GPR.n.ra;
 
-	psxBranchTest();
+	hleBranchTestIfDue();
 }
 
 static void hleA0(void) {
@@ -35,7 +53,7 @@ static void hleA0(void) {
 
 	if (biosA0[call]) biosA0[call]();
 
-	psxBranchTest();
+	hleBranchTestIfDue();
 }
 
 static void hleB0(void) {
@@ -43,7 +61,7 @@ static void hleB0(void) {
 
 	if (biosB0[call]) biosB0[call]();
 
-	psxBranchTest();
+	hleBranchTestIfDue();
 }
 
 static void hleC0(void) {
@@ -51,7 +69,7 @@ static void hleC0(void) {
 
 	if (biosC0[call]) biosC0[call]();
 
-	psxBranchTest();
+	hleBranchTestIfDue();
 }
 
 static void hleBootstrap(void) { // 0xbfc00000

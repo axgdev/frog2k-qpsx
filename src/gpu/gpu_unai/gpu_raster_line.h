@@ -299,7 +299,12 @@ void gpuDrawLineF(PtrUnion packet, const PSD gpuPixelSpanDriver)
 /////////////////////////
 // Gouraud-shaded line //
 /////////////////////////
+#if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+void gpuDrawLineG(PtrUnion packet, const PSD gpuPixelSpanDriver,
+			  const PSD flatPixelSpanDriver)
+#else
 void gpuDrawLineG(PtrUnion packet, const PSD gpuPixelSpanDriver)
+#endif
 {
 	int x0, y0, x1, y1;
 	int dx, dy, dr, dg, db;
@@ -325,6 +330,29 @@ void gpuDrawLineG(PtrUnion packet, const PSD gpuPixelSpanDriver)
 
 	u32 col0 = packet.U4[0];
 	u32 col1 = packet.U4[2];
+
+#if QPSX_GPU_RUNTIME_METRICS
+	++qpsx_gpu_line_g_total;
+#endif
+	/* On the HC15xx build Gouraud channels are quantized to five bits before
+	 * they reach the pixel driver. If both endpoints quantize identically,
+	 * every pixel is exactly the corresponding flat-line color; preserve the
+	 * endpoint geometry but use the smaller flat driver. The packet copy is
+	 * necessary because Gouraud lines store the second endpoint at S6/S7,
+	 * while flat lines expect it at S4/S5. */
+#if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+	if (((col0 ^ col1) & 0x00f8f8f8u) == 0) {
+		PtrUnion flat_packet = packet;
+
+		flat_packet.S2[4] = packet.S2[6];
+		flat_packet.S2[5] = packet.S2[7];
+#if QPSX_GPU_RUNTIME_METRICS
+		++qpsx_gpu_line_g_flatfast;
+#endif
+		gpuDrawLineF(flat_packet, flatPixelSpanDriver);
+		return;
+	}
+#endif
 
 	// Always draw top to bottom, so ensure y0 <= y1
 	if (y0 > y1) {

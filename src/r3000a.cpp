@@ -140,6 +140,18 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_BUILD_TAG
 #define QPSX_BUILD_TAG "untagged"
 #endif
+#ifndef QPSX_MIPS_ASM_MEM_READS
+#define QPSX_MIPS_ASM_MEM_READS 0
+#endif
+#ifndef QPSX_LINUX_RAM_HELPER_FASTPATH
+#define QPSX_LINUX_RAM_HELPER_FASTPATH 0
+#endif
+#ifndef QPSX_HLE_LAZY_EVENT_CHECK
+#define QPSX_HLE_LAZY_EVENT_CHECK 0
+#endif
+#ifndef QPSX_GPU_GOURAUD_LINE_FLATFAST
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST 0
+#endif
 
 #ifdef PSXREC
 extern "C" void recLogTelemetry(void);
@@ -182,6 +194,11 @@ int psxInit() {
 	     QPSX_MIPS_FAST_MEM_CONVERT);
 	xlog("QPSX: mips_opts fuzzy_addiu=%d",
 	     QPSX_MIPS_PROPAGATE_FUZZY_ADDR);
+	xlog("QPSX: mem_opts ram_helper=%d asm_reads=%d hle_lazy=%d",
+	     QPSX_LINUX_RAM_HELPER_FASTPATH, QPSX_MIPS_ASM_MEM_READS,
+	     QPSX_HLE_LAZY_EVENT_CHECK);
+	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d",
+	     QPSX_GPU_GOURAUD_LINE_FLATFAST);
 	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d",
 	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
 	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,

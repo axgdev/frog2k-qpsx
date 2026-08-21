@@ -79,6 +79,9 @@
 #ifndef QPSX_GPU_HOT_DRIVER_ORDER
 #define QPSX_GPU_HOT_DRIVER_ORDER 0
 #endif
+#ifndef QPSX_GPU_GOURAUD_LINE_FLATFAST
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST 0
+#endif
 #if QPSX_GPU_4BPP_PALETTE_LUT
 #if defined(__GNUC__)
 #define QPSX_GPU_PALETTE_LUT_NOINLINE __attribute__((noinline))
@@ -111,6 +114,8 @@ extern u32 qpsx_gpu_poly_unit_u_spans;
 extern u32 qpsx_gpu_poly_unit_u_pixels;
 extern u32 qpsx_gpu_poly_flat_v_spans;
 extern u32 qpsx_gpu_poly_flat_v_pixels;
+extern u32 qpsx_gpu_line_g_total;
+extern u32 qpsx_gpu_line_g_flatfast;
 #endif
 
 #if QPSX_GPU_4BPP_FLATV
@@ -519,6 +524,16 @@ qpsx_gpu_fill_flat_poly(u16 *pDst, u32 count, u16 data)
 // QPSX v089: Enable for SF2000 - fewer bits = faster math, minor visual difference
 #if defined(SF2000) || defined(__mips__)
 #define GPU_GOURAUD_LOW_PRECISION
+#endif
+
+/* The flat-line shortcut is exact only with the five-bit channel
+ * quantization used by the SF2000/MIPS build. Keep an experimental request
+ * disabled on desktop/high-precision builds rather than changing rendering
+ * semantics there. */
+#if QPSX_GPU_GOURAUD_LINE_FLATFAST && defined(GPU_GOURAUD_LOW_PRECISION)
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE 1
+#else
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE 0
 #endif
 
 // How many bits of fixed-point precision GouraudColor uses
@@ -1444,6 +1459,8 @@ u32 qpsx_gpu_poly_unit_u_spans;
 u32 qpsx_gpu_poly_unit_u_pixels;
 u32 qpsx_gpu_poly_flat_v_spans;
 u32 qpsx_gpu_poly_flat_v_pixels;
+u32 qpsx_gpu_line_g_total;
+u32 qpsx_gpu_line_g_flatfast;
 
 static inline PP qpsx_gpu_poly_driver(u32 index)
 {

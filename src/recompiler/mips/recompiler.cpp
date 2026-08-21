@@ -1277,7 +1277,7 @@ __asm__ __volatile__ (
 // The block ptrs are mapped virtually to address space allowing lower
 //  24 bits of PS1 PC address to lookup start of any RAM or ROM code block.
 "lui   $t2, %[REC_RAM_VADDR_UPPER]            \n"
-#ifdef HAVE_MIPS32R2_EXT_INS
+#if defined(HAVE_MIPS32R2_EXT_INS) && defined(QPSX_ENABLE_MIPS32R2) && QPSX_ENABLE_MIPS32R2
 "ins   $t2, $v0, 0, 24                        \n"
 #else
 "sll   $t1, $v0, 8                            \n"
@@ -1674,7 +1674,7 @@ __asm__ __volatile__ (
 // The block ptrs are mapped virtually to address space allowing lower
 //  24 bits of PS1 PC address to lookup start of any RAM or ROM code block.
 "lui   $t2, %[REC_RAM_VADDR_UPPER]            \n"
-#ifdef HAVE_MIPS32R2_EXT_INS
+#if defined(HAVE_MIPS32R2_EXT_INS) && defined(QPSX_ENABLE_MIPS32R2) && QPSX_ENABLE_MIPS32R2
 "ins   $t2, $v0, 0, 24                        \n"
 #else
 "sll   $t1, $v0, 8                            \n"

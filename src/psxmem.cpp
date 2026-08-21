@@ -120,6 +120,33 @@ bool psxH_allocated;
 /* Track if we're using fixed address (to prevent free() on fixed addr) */
 static bool psxM_is_fixed_addr = false;
 
+/*
+ * Linux owns psxM as one stable 2 MiB allocation.  The normal helper path
+ * still performs a 64K LUT load for every dynamic access, even though the
+ * PS1 exposes only an 8 MiB mirrored RAM window.  This optional fast path
+ * recognizes that window directly and folds the mirror into one mask.  It is
+ * deliberately compile-time selectable: the extra range test grows the
+ * helper text, so a device/QEMU A/B must prove that the saved D-cache load is
+ * worth the I-cache bytes for a given game.
+ */
+#ifndef QPSX_LINUX_RAM_HELPER_FASTPATH
+#define QPSX_LINUX_RAM_HELPER_FASTPATH 0
+#endif
+
+#if QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+static inline u8 *psxMemRamFastPointer(u32 mem)
+{
+	u32 segment = mem & 0xe0000000u;
+
+	/* KUSEG, KSEG0 and KSEG1 all mirror the first 8 MiB; the low
+	 * 21 bits select the physical 2 MiB RAM after the mirror is folded. */
+	if ((segment == 0 || segment == 0x80000000u ||
+		segment == 0xa0000000u) && !(mem & 0x1f800000u))
+		return (u8 *)psxM + (mem & 0x001fffffu);
+	return NULL;
+}
+#endif
+
 u8 **psxMemWLUT;
 u8 **psxMemRLUT;
 
@@ -444,6 +471,11 @@ u8 psxMemRead8(u32 mem)
 		else
 			ret = psxHwRead8(mem);
 	} else {
+#if QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+		u8 *fast = psxMemRamFastPointer(mem);
+		if (fast != NULL)
+			return *fast;
+#endif
 		u8 *p = (u8*)(psxMemRLUT[t]);
 		if (p != NULL) {
 			return *(u8*)(p + m);
@@ -469,6 +501,11 @@ u16 psxMemRead16(u32 mem)
 		else
 			ret = psxHwRead16(mem);
 	} else {
+#if QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+		u8 *fast = psxMemRamFastPointer(mem);
+		if (fast != NULL)
+			return SWAPu16(*(u16 *)fast);
+#endif
 		u8 *p = (u8*)(psxMemRLUT[t]);
 		if (p != NULL) {
 			ret = SWAPu16(*(u16*)(p + m));
@@ -495,6 +532,11 @@ u32 psxMemRead32(u32 mem)
 		else
 			ret = psxHwRead32(mem);
 	} else {
+#if QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+		u8 *fast = psxMemRamFastPointer(mem);
+		if (fast != NULL)
+			return SWAPu32(*(u32 *)fast);
+#endif
 		u8 *p = (u8*)(psxMemRLUT[t]);
 		if (p != NULL) {
 			ret = SWAPu32(*(u32*)(p + m));
@@ -521,6 +563,16 @@ void psxMemWrite8(u32 mem, u8 value)
 		else
 			psxHwWrite8(mem, value);
 	} else {
+#if QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+		u8 *fast = psxMemRamFastPointer(mem);
+		if (fast != NULL) {
+			*fast = value;
+#ifdef PSXREC
+			psxCpu->Clear(mem & ~3u, 1);
+#endif
+			return;
+		}
+#endif
 		u8 *p = (u8*)(psxMemWLUT[t]);
 		if (p != NULL) {
 			*(u8*)(p + m) = value;
@@ -545,6 +597,16 @@ void psxMemWrite16(u32 mem, u16 value)
 		else
 			psxHwWrite16(mem, value);
 	} else {
+#if QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+		u8 *fast = psxMemRamFastPointer(mem);
+		if (fast != NULL) {
+			*(u16 *)fast = SWAPu16(value);
+#ifdef PSXREC
+			psxCpu->Clear(mem & ~3u, 1);
+#endif
+			return;
+		}
+#endif
 		u8 *p = (u8*)(psxMemWLUT[t]);
 		if (p != NULL) {
 			*(u16*)(p + m) = SWAPu16(value);
@@ -583,6 +645,16 @@ void psxMemWrite32(u32 mem, u32 value)
 		else
 			psxHwWrite32(mem, value);
 	} else {
+#if QPSX_LINUX_RAM_HELPER_FASTPATH && defined(QPSX_LINUX_ALLOCATED_RAM)
+		u8 *fast = psxMemRamFastPointer(mem);
+		if (fast != NULL) {
+			*(u32 *)fast = SWAPu32(value);
+#ifdef PSXREC
+			psxCpu->Clear(mem, 1);
+#endif
+			return;
+		}
+#endif
 		u8 *p = (u8*)(psxMemWLUT[t]);
 		if (p != NULL) {
 			*(u32*)(p + m) = SWAPu32(value);
