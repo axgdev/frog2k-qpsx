@@ -144,6 +144,33 @@ static s8 *recRAM;
 static s8 *recROM;
 static uptr psxRecLUT[0x10000];
 
+#if defined(QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH) && \
+    QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH
+/*
+ * The NOMMU Linux port cannot mirror recRAM into the guest address space, so
+ * every block dispatch otherwise reads both psxRecLUT and a widely scattered
+ * recRAM slot. Keep recent PC-to-host-code translations in one HC15xx cache
+ * line. recClear() and recReset() invalidate it alongside the authoritative
+ * block-pointer arrays.
+ */
+struct rec_dispatch_entry {
+	u32 pc;
+	u32 code;
+};
+
+static struct rec_dispatch_entry rec_dispatch_cache[16]
+	__attribute__((aligned(128)));
+
+static inline void rec_dispatch_cache_clear()
+{
+	memset(rec_dispatch_cache, 0, sizeof(rec_dispatch_cache));
+}
+#else
+static inline void rec_dispatch_cache_clear()
+{
+}
+#endif
+
 #undef PC_REC
 #undef PC_REC8
 #undef PC_REC16
@@ -759,11 +786,14 @@ __asm__ __volatile__ (
 ".equ  f_off_psxBranchTest,          28        \n"
 ".equ  f_off_frame_complete,         32        \n"
 ".equ  f_off_psxRecLUT,              36        \n"
+".equ  f_off_dispatch_cache,         40        \n"
+".equ  f_off_temp_cache_entry,       44        \n"
 "addiu $sp, $sp, -frame_size                  \n"
 "sw    %[recRecompile], f_off_recRecompile($sp) \n"
 "sw    %[psxBranchTest], f_off_psxBranchTest($sp) \n"
 "sw    %[emu_frame_complete], f_off_frame_complete($sp) \n"
 "sw    %[psxRecLUT], f_off_psxRecLUT($sp)     \n"
+"sw    %[dispatch_cache], f_off_dispatch_cache($sp) \n"
 
 // Derive the local return address without an absolute text relocation.
 "bal   setup_return%=                         \n"
@@ -794,8 +824,7 @@ __asm__ __volatile__ (
 // The loop pseudocode is this, interleaving ops to reduce load stalls:
 //
 // loop:
-// $t2 = psxRecLUT[pxsRegs.pc >> 16] + (psxRegs.pc & 0xffff)
-// $t0 = *($t2)
+// $t0 = cached host code for psxRegs.pc, falling back to psxRecLUT/recRAM
 // psxRegs.cycle += $v1
 // if (psxRegs.cycle >= psxRegs.io_cycle_counter)
 //    goto call_psxBranchTest;
@@ -810,20 +839,20 @@ __asm__ __volatile__ (
 // Infinite loop, blocks return here
 "loop%=:                                      \n"
 "lw    $t3, %[psxRegs_cycle_off]($fp)         \n" // $t3 = psxRegs.cycle
-"srl   $t2, $v0, 16                           \n"
-"sll   $t2, $t2, 2                            \n" // sizeof() psxRecLUT[] elements is 4
-"lw    $t1, f_off_psxRecLUT($sp)              \n"
-"addu  $t1, $t1, $t2                          \n"
-"lw    $t1, 0($t1)                            \n" // $t1 = psxRecLUT[psxRegs.pc >> 16]
+"andi  $t2, $v0, 0x003c                       \n" // 16-entry cache index
+"sll   $t2, $t2, 1                            \n" // eight bytes per entry
+"lw    $t1, f_off_dispatch_cache($sp)         \n"
+"addu  $t6, $t1, $t2                          \n" // $t6 = cache entry
+"lw    $t5, 0($t6)                            \n" // cached guest PC
+"lw    $t0, 4($t6)                            \n" // cached host code
 "lw    $t4, %[psxRegs_io_cycle_ctr_off]($fp)  \n" // $t4 = psxRegs.io_cycle_counter
 "addu  $t3, $t3, $v1                          \n" // $t3 = psxRegs.cycle + $v1
-"andi  $t0, $v0, 0xffff                       \n"
-"addu  $t2, $t0, $t1                          \n"
-"lw    $t0, 0($t2)                            \n" // $t0 = address of start of block code, or
-                                                  //       or 0 if block needs recompilation
-                                                  // IMPORTANT: leave block ptr in $t2, it gets
-                                                  // saved & re-used if recRecompile() is called.
+"bne   $t5, $v0, dispatch_cache_miss%=        \n"
+"nop                                           \n"
+"beqz  $t0, dispatch_cache_miss%=             \n"
+"nop                                           \n"
 
+"dispatch_cache_ready%=:                      \n"
 
 // Must call psxBranchTest() when psxRegs.cycle >= psxRegs.io_cycle_counter
 "sltu  $t4, $t3, $t4                          \n"
@@ -839,6 +868,24 @@ __asm__ __volatile__ (
 "execute_block%=:                             \n"
 "jr    $t0                                    \n"
 "lw    $ra, 16($sp)                           \n" // <BD> Load block return address
+
+// Cache miss: use the authoritative two-level LUT and fill the cache entry.
+"dispatch_cache_miss%=:                       \n"
+"srl   $t2, $v0, 16                           \n"
+"sll   $t2, $t2, 2                            \n" // sizeof() psxRecLUT[] elements is 4
+"lw    $t1, f_off_psxRecLUT($sp)              \n"
+"addu  $t1, $t1, $t2                          \n"
+"lw    $t1, 0($t1)                            \n" // $t1 = psxRecLUT[psxRegs.pc >> 16]
+"andi  $t0, $v0, 0xffff                       \n"
+"addu  $t2, $t0, $t1                          \n"
+"lw    $t0, 0($t2)                            \n" // $t0 = address of start of block code, or
+                                                  //       or 0 if block needs recompilation
+                                                  // IMPORTANT: leave block ptr in $t2, it gets
+                                                  // saved & re-used if recRecompile() is called.
+"sw    $v0, 0($t6)                            \n"
+"sw    $t0, 4($t6)                            \n"
+"b     dispatch_cache_ready%=                 \n"
+"nop                                           \n"
 
 ////////////////////////////
 //     NON-LOOP CODE:     //
@@ -865,12 +912,16 @@ __asm__ __volatile__ (
 // Recompile block and return to normal codepath.
 "recompile_block%=:                           \n"
 "lw    $t9, f_off_recRecompile($sp)           \n"
+"sw    $t6, f_off_temp_cache_entry($sp)       \n"
 "jalr  $t9                                    \n"
 "sw    $t2, f_off_temp_var1($sp)              \n" // <BD> Save block ptr across call
 "lw    $t2, f_off_temp_var1($sp)              \n" // Restore block ptr upon return
+"lw    $t6, f_off_temp_cache_entry($sp)       \n"
 "lw    $v0, %[psxRegs_pc_off]($fp)            \n" // Blocks expect $v0 to contain PC val on entry
+"lw    $t0, 0($t2)                            \n"
+"sw    $v0, 0($t6)                            \n"
 "b     execute_block%=                        \n" // Resume normal code path, but first we must..
-"lw    $t0, 0($t2)                            \n" // <BD> ..load $t0 with ptr to block code
+"sw    $t0, 4($t6)                            \n" // <BD> ..publish compiled code in cache
 
 // QPSX_039: Exit point - frame complete, return to libretro
 "exit%=:                                      \n"
@@ -886,6 +937,7 @@ __asm__ __volatile__ (
   [recRecompile]               "d" (&recRecompile),
   [psxBranchTest]              "d" (&psxBranchTest),
   [psxRecLUT]                  "d" (psxRecLUT),
+  [dispatch_cache]             "d" (rec_dispatch_cache),
   [emu_frame_complete]         "d" (&emu_frame_complete)
 : // Clobber - No need to list anything but 'saved' regs
   "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "fp", "ra", "memory"
@@ -1793,6 +1845,7 @@ extern "C" void recClear(u32 Addr, u32 Size)
 	if (has_code) {
 		void *dst = (void*)(dst_base + (masked_ram_addr * REC_RAM_PTR_SIZE/4));
 		memset(dst, 0, Size*REC_RAM_PTR_SIZE);
+		rec_dispatch_cache_clear();
 	}
 }
 
@@ -1869,6 +1922,7 @@ void recNotify(int note, void *data __attribute__((unused)))
 static void recReset()
 {
 	memset(code_pages, 0, sizeof(code_pages));
+	rec_dispatch_cache_clear();
 	memset(recRAM, 0, REC_RAM_SIZE);
 	memset(recROM, 0, REC_ROM_SIZE);
 
