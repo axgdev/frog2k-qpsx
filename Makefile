@@ -41,12 +41,18 @@ all: $(TARGET)
 
 HOST_CXX ?= c++
 GPU_POLY2043_TEST = tests/gpu_poly2043_diff
+GPU_DMA_CHAIN_TEST = tests/gpu_dma_chain_fast_diff
 
 .PHONY: check
-check: $(GPU_POLY2043_TEST)
+check: $(GPU_POLY2043_TEST) $(GPU_DMA_CHAIN_TEST)
 	./$(GPU_POLY2043_TEST)
+	./$(GPU_DMA_CHAIN_TEST)
 
 $(GPU_POLY2043_TEST): tests/gpu_poly2043_diff.cpp
+	$(HOST_CXX) -std=c++11 -O2 -Wall -Wextra -Werror $< -o $@
+
+$(GPU_DMA_CHAIN_TEST): tests/gpu_dma_chain_fast_diff.cpp \
+		src/gpu/gpulib/gpu_dma_chain_fast.h
 	$(HOST_CXX) -std=c++11 -O2 -Wall -Wextra -Werror $< -o $@
 
 # Port selection - libretro (not SDL!)
