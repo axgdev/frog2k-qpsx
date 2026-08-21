@@ -43,6 +43,7 @@ HOST_CXX ?= c++
 GPU_POLY2043_TEST = tests/gpu_poly2043_diff
 GPU_DMA_CHAIN_TEST = tests/gpu_dma_chain_fast_diff
 GTE_INTPL_TEST = tests/gte_intpl_diff
+GTE_RTPT_LAYOUT_TEST = tests/gte_rtpt_layout_audit
 
 # Build the real GTE translation unit for the host differential test.  The
 # source has many platform entry points, so function sections plus linker GC
@@ -55,11 +56,28 @@ GTE_INTPL_TEST_CXXFLAGS = -std=c++11 -O2 -Wall -Wextra -Werror \
 	-DINLINE='static inline' -DQPSX_GTE_INTPL_OPTIMIZE=1 \
 	-DQPSX_PROFILER_ENABLED=0 -Isrc -Isrc/port/libretro
 
-.PHONY: check
-check: $(GPU_POLY2043_TEST) $(GPU_DMA_CHAIN_TEST) $(GTE_INTPL_TEST)
+.PHONY: check qpsx-asm-read-audit gte-rtpt-asm-audit
+check: $(GPU_POLY2043_TEST) $(GPU_DMA_CHAIN_TEST) $(GTE_INTPL_TEST) \
+	$(GTE_RTPT_LAYOUT_TEST) qpsx-asm-read-audit gte-rtpt-asm-audit
 	./$(GPU_POLY2043_TEST)
 	./$(GPU_DMA_CHAIN_TEST)
 	./$(GTE_INTPL_TEST)
+	./$(GTE_RTPT_LAYOUT_TEST)
+
+gte-rtpt-asm-audit:
+	@set -eu; tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	$(HOST_CXX) -E -P -Isrc src/gte_rtpt_asm.S -o "$$tmp/rtpt.s"; \
+	grep -F 'gte_RTPT_asm:' "$$tmp/rtpt.s" >/dev/null; \
+	grep -F '264' "$$tmp/rtpt.s" >/dev/null; \
+	grep -F '392' "$$tmp/rtpt.s" >/dev/null; \
+	if grep -E '^#define OFF_[A-Za-z0-9_]+[[:space:]]+[0-9]' src/gte_rtpt_asm.S >/dev/null; then \
+		echo 'gte-rtpt-asm-audit: hard-coded local RTPT offsets remain' >&2; exit 1; \
+	fi; \
+	echo 'gte-rtpt-asm-audit: assembly expands shared RTPT layout constants'
+
+qpsx-asm-read-audit:
+	$(MAKE) -f Makefile.libretro QPSX_AUDIT_CXX="$(HOST_CXX)" asm-read-audit
 
 $(GPU_POLY2043_TEST): tests/gpu_poly2043_diff.cpp
 	$(HOST_CXX) -std=c++11 -O2 -Wall -Wextra -Werror $< -o $@
@@ -76,6 +94,12 @@ $(GTE_INTPL_TEST): tests/gte_intpl_diff.cpp src/gte.cpp src/gte.h \
 	$(HOST_CXX) $(GTE_INTPL_TEST_CXXFLAGS) -c src/gte.cpp -o "$$tmp/gte.o"; \
 	$(HOST_CXX) $(GTE_INTPL_TEST_CXXFLAGS) -c $< -o "$$tmp/test.o"; \
 	$(HOST_CXX) -Wl,--gc-sections "$$tmp/test.o" "$$tmp/gte.o" -o $@
+
+$(GTE_RTPT_LAYOUT_TEST): tests/gte_rtpt_layout_audit.cpp src/r3000a.h \
+	src/psxcommon.h src/psxmem.h src/psxcounters.h src/psxbios.h \
+	src/port/libretro/port.h src/gte_rtpt_layout.h
+	$(HOST_CXX) -std=c++11 -O2 -Wall -Wextra -Werror \
+		-Isrc -Isrc/port/libretro $< -o $@
 
 # Port selection - libretro (not SDL!)
 PORT = libretro

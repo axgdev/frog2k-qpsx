@@ -995,7 +995,7 @@ static void general_loads_stores(const int  count,
 	{
 		enum { WIDTH_8, WIDTH_16, WIDTH_32 };
 		const uptr mem_read_func[]  = {
-#if defined(QPSX_MIPS_ASM_MEM_READS) && QPSX_MIPS_ASM_READS
+#if defined(QPSX_MIPS_ASM_MEM_READS) && QPSX_MIPS_ASM_MEM_READS
 			(uptr)psxMemRead8_asm, (uptr)psxMemRead16_asm, (uptr)psxMemRead32_asm
 #else
 			(uptr)psxMemRead8, (uptr)psxMemRead16, (uptr)psxMemRead32

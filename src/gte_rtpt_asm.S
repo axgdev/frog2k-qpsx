@@ -18,43 +18,45 @@
 .set noreorder
 .set noat
 
-#define OFF_CP2D        264
-#define OFF_CP2C        392
+#include "gte_rtpt_layout.h"
 
-#define OFF_SZ0         (OFF_CP2D + 16*4)
-#define OFF_SZ1         (OFF_CP2D + 17*4)
-#define OFF_SZ2         (OFF_CP2D + 18*4)
-#define OFF_SZ3         (OFF_CP2D + 19*4)
-#define OFF_IR0         (OFF_CP2D + 8*4)
-#define OFF_IR1         (OFF_CP2D + 9*4)
-#define OFF_IR2         (OFF_CP2D + 10*4)
-#define OFF_IR3         (OFF_CP2D + 11*4)
-#define OFF_SXY0        (OFF_CP2D + 12*4)
-#define OFF_SXY1        (OFF_CP2D + 13*4)
-#define OFF_SXY2        (OFF_CP2D + 14*4)
-#define OFF_MAC0        (OFF_CP2D + 24*4)
-#define OFF_MAC1        (OFF_CP2D + 25*4)
-#define OFF_MAC2        (OFF_CP2D + 26*4)
-#define OFF_MAC3        (OFF_CP2D + 27*4)
-
-#define OFF_R11         (OFF_CP2C + 0*4)
-#define OFF_R12         (OFF_CP2C + 0*4 + 2)
-#define OFF_R13         (OFF_CP2C + 1*4)
-#define OFF_R21         (OFF_CP2C + 1*4 + 2)
-#define OFF_R22         (OFF_CP2C + 2*4)
-#define OFF_R23         (OFF_CP2C + 2*4 + 2)
-#define OFF_R31         (OFF_CP2C + 3*4)
-#define OFF_R32         (OFF_CP2C + 3*4 + 2)
-#define OFF_R33         (OFF_CP2C + 4*4)
-#define OFF_TRX         (OFF_CP2C + 5*4)
-#define OFF_TRY         (OFF_CP2C + 6*4)
-#define OFF_TRZ         (OFF_CP2C + 7*4)
-#define OFF_OFX         (OFF_CP2C + 24*4)
-#define OFF_OFY         (OFF_CP2C + 25*4)
-#define OFF_H           (OFF_CP2C + 26*4)
-#define OFF_DQA         (OFF_CP2C + 27*4)
-#define OFF_DQB         (OFF_CP2C + 28*4)
-#define OFF_FLAG        (OFF_CP2C + 31*4)
+/* Short aliases keep the instruction body readable; values come exclusively
+ * from gte_rtpt_layout.h, which is also checked by C++. */
+#define OFF_CP2D QPSX_RTPT_OFF_CP2D
+#define OFF_CP2C QPSX_RTPT_OFF_CP2C
+#define OFF_SZ0 QPSX_RTPT_OFF_SZ0
+#define OFF_SZ1 QPSX_RTPT_OFF_SZ1
+#define OFF_SZ2 QPSX_RTPT_OFF_SZ2
+#define OFF_SZ3 QPSX_RTPT_OFF_SZ3
+#define OFF_IR0 QPSX_RTPT_OFF_IR0
+#define OFF_IR1 QPSX_RTPT_OFF_IR1
+#define OFF_IR2 QPSX_RTPT_OFF_IR2
+#define OFF_IR3 QPSX_RTPT_OFF_IR3
+#define OFF_SXY0 QPSX_RTPT_OFF_SXY0
+#define OFF_SXY1 QPSX_RTPT_OFF_SXY1
+#define OFF_SXY2 QPSX_RTPT_OFF_SXY2
+#define OFF_MAC0 QPSX_RTPT_OFF_MAC0
+#define OFF_MAC1 QPSX_RTPT_OFF_MAC1
+#define OFF_MAC2 QPSX_RTPT_OFF_MAC2
+#define OFF_MAC3 QPSX_RTPT_OFF_MAC3
+#define OFF_R11 QPSX_RTPT_OFF_R11
+#define OFF_R12 QPSX_RTPT_OFF_R12
+#define OFF_R13 QPSX_RTPT_OFF_R13
+#define OFF_R21 QPSX_RTPT_OFF_R21
+#define OFF_R22 QPSX_RTPT_OFF_R22
+#define OFF_R23 QPSX_RTPT_OFF_R23
+#define OFF_R31 QPSX_RTPT_OFF_R31
+#define OFF_R32 QPSX_RTPT_OFF_R32
+#define OFF_R33 QPSX_RTPT_OFF_R33
+#define OFF_TRX QPSX_RTPT_OFF_TRX
+#define OFF_TRY QPSX_RTPT_OFF_TRY
+#define OFF_TRZ QPSX_RTPT_OFF_TRZ
+#define OFF_OFX QPSX_RTPT_OFF_OFX
+#define OFF_OFY QPSX_RTPT_OFF_OFY
+#define OFF_H QPSX_RTPT_OFF_H
+#define OFF_DQA QPSX_RTPT_OFF_DQA
+#define OFF_DQB QPSX_RTPT_OFF_DQB
+#define OFF_FLAG QPSX_RTPT_OFF_FLAG
 
 .text
 .align 2

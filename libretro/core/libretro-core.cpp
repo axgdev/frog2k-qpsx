@@ -88,20 +88,6 @@ extern "C" {
 }
 #endif
 
-#if QPSX_RUNTIME_TELEMETRY
-/* The recompiler updates counters only while translating a new block.  A
- * periodic report lets an uncapped QEMU run (which may terminate without a
- * normal retro_deinit()) expose those counters without adding a per-frame
- * timer or a per-instruction profiler hook. */
-extern "C" void recLogTelemetry(void);
-#endif
-#if QPSX_GPU_RUNTIME_METRICS
-/* The QEMU/physical benchmark may stop without a normal core shutdown.  A
- * periodic report therefore makes the primitive histogram observable while
- * preserving the production build's zero-cost path. */
-extern "C" void renderer_log_metrics(void);
-#endif
-
 /*
  * QPSX_075: Debug Logging System
  *
@@ -3906,17 +3892,6 @@ void retro_run(void)
     if (g_debug_log_enabled && (run_frame_count % 60 == 0)) {
         XLOG("retro_run progress: frame %d", run_frame_count);
     }
-#if QPSX_RUNTIME_TELEMETRY || QPSX_GPU_RUNTIME_METRICS
-    if ((run_frame_count % 600) == 0) {
-#if QPSX_RUNTIME_TELEMETRY
-        recLogTelemetry();
-#endif
-#if QPSX_GPU_RUNTIME_METRICS
-        renderer_log_metrics();
-#endif
-    }
-#endif
-
     /* v377: Safe mode REMOVED */
 
     update_fps_counter();

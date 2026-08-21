@@ -164,6 +164,10 @@ endif
 
 all: $(TARGET)
 
+# The branch-selection audit is source-only and must remain runnable from the
+# host check even when a caller's CXX names the MIPS cross compiler.
+QPSX_AUDIT_CXX ?= c++
+
 # Port selection - libretro (not SDL!)
 PORT = libretro
 
@@ -229,8 +233,12 @@ qpsx-config-force:
 $(QPSX_CONFIG_STAMP): qpsx-config-force
 	@set -eu; tmp='$@.tmp'; \
 	{ printf '%s\n' \
+		'platform=$(platform)' \
 		'QPSX_PLATFORM=$(QPSX_PLATFORM)' \
 		'QPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)' \
+		'QPSX_OPTIMIZE=$(QPSX_OPTIMIZE)' \
+		'QPSX_GPU_OPTIMIZE=$(QPSX_GPU_OPTIMIZE)' \
+		'QPSX_SPU_OPTIMIZE=$(QPSX_SPU_OPTIMIZE)' \
 		'QPSX_LINUX_RAM_HELPER_FASTPATH=$(QPSX_LINUX_RAM_HELPER_FASTPATH)' \
 		'QPSX_MIPS_ASM_MEM_READS=$(QPSX_MIPS_ASM_MEM_READS)' \
 		'QPSX_HLE_LAZY_EVENT_CHECK=$(QPSX_HLE_LAZY_EVENT_CHECK)' \
@@ -240,6 +248,7 @@ $(QPSX_CONFIG_STAMP): qpsx-config-force
 		'QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK)' \
 		'QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH)' \
 		'QPSX_GE_RAW_VRAM=$(QPSX_GE_RAW_VRAM)' \
+		'QPSX_GPU_RECIP_TABLE_BITS=$(QPSX_GPU_RECIP_TABLE_BITS)' \
 		'QPSX_GPU_4BPP_FULLMASK=$(QPSX_GPU_4BPP_FULLMASK)' \
 		'QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS=$(QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS)' \
 		'QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES=$(QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES)' \
@@ -256,10 +265,14 @@ $(QPSX_CONFIG_STAMP): qpsx-config-force
 		'QPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS)' \
 		'QPSX_BUILD_TAG=$(QPSX_BUILD_TAG)' \
 		'QPSX_BUILD_FINGERPRINT=$(QPSX_BUILD_FINGERPRINT)' \
-		'CC=$(CC)' 'CXX=$(CXX)' 'AR=$(AR)'; \
+		'GPU=$(GPU)' 'SPU=$(SPU)' 'RECOMPILER=$(RECOMPILER)' \
+		'STATIC_LINKING=$(STATIC_LINKING)' 'TARGET=$(TARGET)' \
+		'CC=$(CC)' 'CXX=$(CXX)' 'AR=$(AR)' \
+		'CPPFLAGS=$(CPPFLAGS)' 'CFLAGS=$(CFLAGS)' 'CXXFLAGS=$(CXXFLAGS)' \
+		'LDFLAGS=$(LDFLAGS)'; \
 	} > "$$tmp"; \
 	if ! cmp -s "$$tmp" '$@' 2>/dev/null; then \
-		rm -f $(OBJS) '$(TARGET)'; \
+		rm -f $(OBJS) $(DEPFILES) '$(TARGET)'; \
 		mv "$$tmp" '$@'; \
 	else \
 		rm -f "$$tmp"; \
@@ -376,6 +389,13 @@ OBJS += \
 
 $(OBJS): $(QPSX_CONFIG_STAMP)
 
+# Compiler-generated dependencies keep header changes and generated-config
+# changes from silently reusing stale source objects.  DEPFILES is defined
+# after the complete conditional object list above.
+DEPFILES := $(OBJS:.o=.d)
+
+-include $(DEPFILES)
+
 $(TARGET): $(OBJS)
 ifeq ($(STATIC_LINKING), 1)
 	$(AR) rcs $@ $(OBJS)
@@ -384,17 +404,45 @@ else
 endif
 
 clean:
-	$(RM) $(TARGET) $(OBJS) $(QPSX_CONFIG_STAMP)
+	$(RM) $(TARGET) $(OBJS) $(DEPFILES) $(QPSX_CONFIG_STAMP)
+
+.PHONY: asm-read-audit
+asm-read-audit:
+	@set -eu; tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	sed -n '/const uptr mem_read_func\[\]/,/^\t\t};/p' \
+		src/recompiler/mips/rec_lsu.cpp.h > "$$tmp/fragment.cpp"; \
+	$(QPSX_AUDIT_CXX) -E -P -x c++ -UQPSX_MIPS_ASM_MEM_READS \
+		-DQPSX_MIPS_ASM_MEM_READS=1 "$$tmp/fragment.cpp" -o "$$tmp/asm.i"; \
+	$(QPSX_AUDIT_CXX) -E -P -x c++ -UQPSX_MIPS_ASM_MEM_READS \
+		-DQPSX_MIPS_ASM_MEM_READS=0 "$$tmp/fragment.cpp" -o "$$tmp/control.i"; \
+	asm_block=$$(sed -n '/const uptr mem_read_func\[\]/,/};/p' "$$tmp/asm.i"); \
+	control_block=$$(sed -n '/const uptr mem_read_func\[\]/,/};/p' "$$tmp/control.i"); \
+	printf '%s\n' "$$asm_block" | grep -F 'psxMemRead8_asm' >/dev/null; \
+	printf '%s\n' "$$asm_block" | grep -F 'psxMemRead16_asm' >/dev/null; \
+	printf '%s\n' "$$asm_block" | grep -F 'psxMemRead32_asm' >/dev/null; \
+	printf '%s\n' "$$control_block" | grep -F 'psxMemRead8,' >/dev/null; \
+	printf '%s\n' "$$control_block" | grep -F 'psxMemRead16,' >/dev/null; \
+	printf '%s\n' "$$control_block" | grep -F 'psxMemRead32' >/dev/null; \
+	if printf '%s\n' "$$control_block" | grep -F '_asm' >/dev/null; then \
+		echo 'asm-read-audit: control branch selected ASM helper' >&2; exit 1; \
+	fi; \
+	if printf '%s\n' "$$asm_block" | grep -E 'psxMemRead(8|16|32),[[:space:]]' >/dev/null; then \
+		echo 'asm-read-audit: ASM branch selected C helper' >&2; exit 1; \
+	fi; \
+	echo 'asm-read-audit: ASM and control generated branches select the expected helpers'
 
 # Compilation rules
 %.o: %.c
-	$(CC) $(CFLAGS) $(if $(filter src/spu/$(SPU)/spu.o,$@),$(QPSX_SPU_OPTIMIZE),) -c $< -o $@
+	$(CC) $(CFLAGS) $(if $(filter src/spu/$(SPU)/spu.o,$@),$(QPSX_SPU_OPTIMIZE),) \
+		-MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
 
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(if $(filter $@,$(QPSX_GPU_OBJECTS)),$(QPSX_GPU_OPTIMIZE),) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(if $(filter $@,$(QPSX_GPU_OBJECTS)),$(QPSX_GPU_OPTIMIZE),) \
+		-MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
 
 %.o: %.S
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
 
 %.o: %.s
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
