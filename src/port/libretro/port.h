@@ -45,6 +45,8 @@ unsigned short pad_read(int num);
 
 /* Video */
 void video_flip(void);
+unsigned short *video_acquire_framebuffer(void);
+void video_flip_framebuffer(const unsigned short *buffer);
 void video_clear(void);
 void port_printf(int x, int y, const char *text);
 

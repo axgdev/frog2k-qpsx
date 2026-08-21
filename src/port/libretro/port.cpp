@@ -30,6 +30,7 @@ unsigned short *SCREEN = static_screen_buffer;
 
 extern retro_video_refresh_t video_cb;
 extern retro_audio_sample_batch_t audio_batch_cb;
+extern retro_environment_t environ_cb;
 
 extern volatile int skip_video_output;
 
@@ -87,7 +88,28 @@ unsigned short pad_read(int num)
     return val;
 }
 
-void video_flip(void)
+unsigned short *video_acquire_framebuffer(void)
+{
+    struct retro_framebuffer framebuffer;
+
+    if (!environ_cb)
+        return SCREEN;
+
+    memset(&framebuffer, 0, sizeof(framebuffer));
+    framebuffer.width = SCREEN_WIDTH;
+    framebuffer.height = SCREEN_HEIGHT;
+    framebuffer.access_flags = RETRO_MEMORY_ACCESS_WRITE;
+    if (!environ_cb(RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER,
+                    &framebuffer) ||
+        !framebuffer.data ||
+        framebuffer.format != RETRO_PIXEL_FORMAT_RGB565 ||
+        framebuffer.pitch != SCREEN_WIDTH * sizeof(uint16_t))
+        return SCREEN;
+
+    return (unsigned short *)framebuffer.data;
+}
+
+void video_flip_framebuffer(const unsigned short *buffer)
 {
     if (!video_cb) return;
 
@@ -99,11 +121,16 @@ void video_flip(void)
      */
     if (skip_video_output) {
         video_cb(NULL, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
-    } else if (SCREEN) {
+    } else if (buffer) {
         /* v295: Count ACTUAL rendered frames (not skipped) */
         gpu_frame_count++;
-        video_cb(SCREEN, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
+        video_cb(buffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
     }
+}
+
+void video_flip(void)
+{
+    video_flip_framebuffer(SCREEN);
 }
 
 void video_clear(void) { memset(SCREEN, 0, SCREEN_WIDTH * SCREEN_HEIGHT * 2); }

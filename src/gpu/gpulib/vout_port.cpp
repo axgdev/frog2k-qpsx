@@ -422,7 +422,8 @@ void vout_update(void)
 		return;
 
 	bool isRGB24 = gpu.status.rgb24;
-	u16* dst16 = SCREEN;
+	u16* output = video_acquire_framebuffer();
+	u16* dst16 = output;
 	u16* src16 = (u16*)gpu.vram;
 
 	unsigned int src16_offs_msk = 1024*512-1;
@@ -496,7 +497,7 @@ void vout_update(void)
 		} break;
 	}
 
-	video_flip();
+	video_flip_framebuffer(output);
 }
 
 int vout_init(void)
