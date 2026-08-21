@@ -93,6 +93,12 @@ extern "C" void xlog(const char *fmt, ...);
 #ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL
 #define QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL 0
 #endif
+#ifndef QPSX_PERFORMANCE_FRAME_MARKERS
+#define QPSX_PERFORMANCE_FRAME_MARKERS 0
+#endif
+#ifndef QPSX_GPU_DIRECT_PACKET
+#define QPSX_GPU_DIRECT_PACKET 0
+#endif
 #if defined(SHMEM_MIRRORING) || defined(TMPFS_MIRRORING)
 #define QPSX_MIPS_VIRTUAL_MIRRORING 1
 #else
@@ -223,9 +229,10 @@ int psxInit() {
 	     QPSX_MIPS_FAST_MEM_CONVERT);
 	xlog("QPSX: mips_opts fuzzy_addiu=%d",
 	     QPSX_MIPS_PROPAGATE_FUZZY_ADDR);
-	xlog("QPSX: mem_opts ram_helper=%d asm_reads=%d hle_lazy=%d",
+	xlog("QPSX: mem_opts ram_helper=%d asm_reads=%d hle_lazy=%d frame_markers=%d direct_packet=%d",
 	     QPSX_LINUX_RAM_HELPER_FASTPATH, QPSX_MIPS_ASM_MEM_READS,
-	     QPSX_HLE_LAZY_EVENT_CHECK);
+	     QPSX_HLE_LAZY_EVENT_CHECK, QPSX_PERFORMANCE_FRAME_MARKERS,
+	     QPSX_GPU_DIRECT_PACKET);
 	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d",
 	     QPSX_GPU_GOURAUD_LINE_FLATFAST);
 	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d gcache=%d fullmask=%d fullmask_min=%d pack4=%d",

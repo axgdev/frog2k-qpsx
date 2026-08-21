@@ -3850,6 +3850,20 @@ void retro_reset(void) { XLOG("=== retro_reset() ==="); psxReset(); }
 static int run_frame_count = 0;
 static int auto_menu_frames = 0;  /* QPSX_083: Auto menu open/close for SPU/GPU resync */
 
+#ifndef QPSX_PERFORMANCE_FRAME_MARKERS
+#define QPSX_PERFORMANCE_FRAME_MARKERS 0
+#endif
+
+static inline void qpsx_performance_frame_marker(void)
+{
+#if QPSX_PERFORMANCE_FRAME_MARKERS && defined(__mips__)
+    /* `sll $zero,$zero,31` is a no-op on MIPS32 and does not otherwise occur
+     * in the shipped core.  Its unusual encoding gives the QEMU plugin an
+     * exact frame boundary without MMIO, a syscall, or a function call. */
+    __asm__ __volatile__(".word 0x000007c0" ::: "memory");
+#endif
+}
+
 void retro_run(void)
 {
     /* v141: Removed verbose retro_run logging */
@@ -3885,6 +3899,7 @@ void retro_run(void)
         resync_spu_after_pause();
     }
     run_frame_count++;
+    qpsx_performance_frame_marker();
     input_debug_counter++;
     if (g_debug_log_enabled && (run_frame_count % 60 == 0)) {
         XLOG("retro_run progress: frame %d", run_frame_count);
