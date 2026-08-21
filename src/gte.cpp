@@ -55,6 +55,15 @@
 #define QPSX_GTE_HOT
 #endif
 
+#ifndef QPSX_GTE_RTPT_OS
+#define QPSX_GTE_RTPT_OS 0
+#endif
+#if QPSX_GTE_RTPT_OS && defined(__GNUC__)
+#define QPSX_GTE_RTPT_OPT __attribute__((optimize("Os"), flatten))
+#else
+#define QPSX_GTE_RTPT_OPT QPSX_GTE_HOT
+#endif
+
 /* Keep the normal GTE path byte-for-byte free of diagnostic state.  The
  * optional build is intentionally a direct increment in each operation
  * wrapper: unlike cycle/profiler instrumentation it adds no calls, time
@@ -548,7 +557,7 @@ QPSX_GTE_HOT void gteRTPS(void) {
 	PROFILE_END(PROF_GTE_RTPS);
 }
 
-QPSX_GTE_HOT void gteRTPT(void) {
+QPSX_GTE_RTPT_OPT void gteRTPT(void) {
 	QPSX_GTE_COUNT(QPSX_GTE_COUNT_RTPT);
 	int quotient;
 	int v;
