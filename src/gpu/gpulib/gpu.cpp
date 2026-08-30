@@ -13,8 +13,31 @@
 #include <stdlib.h>
 #include "plugins.h"    // For GPUFreeze_t, GPUScreenInfo_t
 #include "gpu.h"
+#include "qpsx_build_config.h"
 #include "plugin_lib.h"
 #include "profiler.h"   /* v092: Profiler support */
+
+#ifndef QPSX_GPU_DMA_CHAIN_FAST
+#define QPSX_GPU_DMA_CHAIN_FAST 0
+#endif
+#ifndef QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK 0
+#endif
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_ENABLED 1
+#else
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_ENABLED 0
+#endif
+#if QPSX_GPU_DMA_CHAIN_FAST && QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#error "QPSX_GPU_DMA_CHAIN_FAST cannot be combined with adaptive DMA"
+#endif
+#if QPSX_GPU_DMA_CHAIN_FAST
+#include "gpu_dma_chain_fast.h"
+#endif
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_ENABLED
+#include "gpu_dma_chain_adaptive.h"
+#endif
+#include "qpsx_phase_metrics.h"
 
 /* SF2000 xlog debugging */
 #ifdef SF2000
@@ -466,7 +489,7 @@ static void finish_vram_transfer(int is_read)
                            gpu.dma_start.w, gpu.dma_start.h);
 }
 
-static noinline int do_cmd_list_skip(uint32_t *data, int count, int *last_cmd)
+QPSX_HOT_GPU static noinline int do_cmd_list_skip(uint32_t *data, int count, int *last_cmd)
 {
   int cmd = 0, pos = 0, len, dummy, v;
   int skip = 1;
@@ -532,7 +555,74 @@ static noinline int do_cmd_list_skip(uint32_t *data, int count, int *last_cmd)
   return pos;
 }
 
-static noinline int do_cmd_buffer(uint32_t *data, int count)
+#if QPSX_GPU_DMA_CHAIN_FAST
+/* The parser is shared by the normal callers and the guarded chain path.
+ * Keeping the body out-of-line limits the fast-chain call site's I-cache
+ * footprint; the default build below retains the historical single function
+ * body and therefore has no new helper call at all. */
+QPSX_HOT_GPU static noinline int
+qpsx_gpu_do_cmd_buffer_body(uint32_t *data, int count,
+                            int *vram_dirty)
+{
+  int cmd, pos;
+
+  *vram_dirty = 0;
+
+  // process buffer
+  for (pos = 0; pos < count; )
+  {
+    if (gpu.dma.h && !gpu.dma_start.is_read) { // XXX: need to verify
+      *vram_dirty = 1;
+      pos += do_vram_io(data + pos, count - pos, 0);
+      if (pos == count)
+        break;
+    }
+
+    cmd = data[pos] >> 24;
+    if (0xa0 <= cmd && cmd <= 0xdf) {
+      // consume vram write/read cmd
+      start_vram_transfer(data[pos + 1], data[pos + 2], (cmd & 0xe0) == 0xc0);
+      pos += 3;
+      continue;
+    }
+
+    // 0xex cmds might affect frameskip.allow, so pass to do_cmd_list_skip
+    if (gpu.frameskip.active && (gpu.frameskip.allow || ((data[pos] >> 24) & 0xf0) == 0xe0))
+      pos += do_cmd_list_skip(data + pos, count - pos, &cmd);
+    else {
+      pos += do_cmd_list(data + pos, count - pos, &cmd);
+      *vram_dirty = 1;
+    }
+
+    if (cmd == -1)
+      // incomplete cmd
+      break;
+  }
+
+  return count - pos;
+}
+
+#if QPSX_GPU_DMA_CHAIN_FAST
+/* The implementation lives in a separate object so enabling the optional
+ * path does not move the parser/chain text within gpu.o. */
+extern void qpsx_gpu_finish_cmd_buffer(int vram_dirty, uint32_t old_e3);
+#endif
+
+QPSX_HOT_GPU static noinline int do_cmd_buffer(uint32_t *data, int count)
+{
+  PROFILE_START(PROF_GPU_TOTAL);
+
+  int vram_dirty;
+  uint32_t old_e3 = gpu.ex_regs[3];
+  int left = qpsx_gpu_do_cmd_buffer_body(data, count, &vram_dirty);
+
+  qpsx_gpu_finish_cmd_buffer(vram_dirty, old_e3);
+
+  PROFILE_END(PROF_GPU_TOTAL);
+  return left;
+}
+#else
+QPSX_HOT_GPU static noinline int do_cmd_buffer(uint32_t *data, int count)
 {
   PROFILE_START(PROF_GPU_TOTAL);
 
@@ -583,6 +673,7 @@ static noinline int do_cmd_buffer(uint32_t *data, int count)
   PROFILE_END(PROF_GPU_TOTAL);
   return count - pos;
 }
+#endif
 
 static void flush_cmd_buffer(void)
 {
@@ -619,11 +710,52 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
   uint32_t addr, *list, ld_addr = 0;
   int len, left, count;
   long cpu_cycles = 0;
+#if QPSX_GPU_DMA_CHAIN_FAST
+  int chain_fast;
+  int chain_saw_node = 0;
+  int chain_dirty = 0;
+  uint32_t chain_old_e3;
+#endif
+#if QPSX_PHASE_METRICS
+  unsigned dma_nodes = 0;
+  unsigned dma_nonempty = 0;
+  unsigned dma_words = 0;
+  unsigned dma_eligible = 0;
+  unsigned dma_batched = 0;
+  unsigned dma_fallback = 0;
+#endif
 
   preload(rambase + (start_addr & 0x1fffff) / 4);
 
   if (unlikely(gpu.cmd_len > 0))
     flush_cmd_buffer();
+
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+  /* The last-list record is written by the historical walker already.  Use a
+   * recent heavy chain as the predictor without adding a frame accumulator or
+   * a new per-chain store to this path. */
+  if (qpsx_gpu_dma_chain_adaptive_prev_ready(
+        gpu.state.last_list.frame, *gpu.state.frame_count,
+        gpu.state.last_list.cycles,
+        (unsigned)QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK,
+        gpu.frameskip.active, gpu.dma.h))
+    return qpsx_gpu_adaptive_dma_chain(rambase, start_addr);
+#endif
+
+#if QPSX_GPU_DMA_CHAIN_FAST
+  /* A pending command-buffer tail, frameskip, or an already active image
+   * transfer makes the observable per-node boundaries significant.  The
+   * shared parser still handles those cases through the legacy path.  E3 can
+   * only change frameskip.allow here; GPU_writeStatus(), the only function
+   * that changes frameskip.active, cannot re-enter during GP0 DMA parsing. */
+  /* do_cmd_list() and start_vram_transfer() operate on gpu_unai/renderer
+   * state, not gpulib's status or fb_dirty fields.  The latter are only
+   * exposed after this call (GPU_readStatus/GPU_updateLace), so publication
+   * may be deferred across ordinary nodes. */
+  chain_fast = qpsx_gpu_dma_chain_can_fast(
+    gpu.cmd_len, gpu.frameskip.active, gpu.dma.h);
+  chain_old_e3 = gpu.ex_regs[3];
+#endif
 
   log_io("gpu_dma_chain\n");
   addr = start_addr & 0xffffff;
@@ -632,6 +764,12 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
     list = rambase + (addr & 0x1fffff) / 4;
     len = list[0] >> 24;
     addr = list[0] & 0xffffff;
+#if QPSX_PHASE_METRICS
+    dma_nodes++;
+    if (len)
+      dma_nonempty++;
+    dma_words += (unsigned)len;
+#endif
     preload(rambase + (addr & 0x1fffff) / 4);
 
     cpu_cycles += 10;
@@ -641,9 +779,31 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
     log_io(".chain %08x #%d\n", (list - rambase) * 4, len);
 
     if (len) {
-      left = do_cmd_buffer(list + 1, len);
-      if (left)
-        log_anomaly("GPUdmaChain: discarded %d/%d words\n", left, len);
+#if QPSX_GPU_DMA_CHAIN_FAST
+      if (chain_fast) {
+        int segment_dirty;
+
+        if (!chain_saw_node)
+          PROFILE_START(PROF_GPU_TOTAL);
+        chain_saw_node = 1;
+        left = qpsx_gpu_do_cmd_buffer_body(
+            list + 1, len, &segment_dirty);
+        if (left)
+          log_anomaly("GPUdmaChain: discarded %d/%d words\n", left, len);
+
+        chain_dirty |= segment_dirty;
+        if (left || gpu.dma.h || gpu.frameskip.active) {
+          qpsx_gpu_finish_cmd_buffer(chain_dirty, chain_old_e3);
+          PROFILE_END(PROF_GPU_TOTAL);
+          chain_fast = 0;
+        }
+      } else
+#endif
+      {
+        left = do_cmd_buffer(list + 1, len);
+        if (left)
+          log_anomaly("GPUdmaChain: discarded %d/%d words\n", left, len);
+      }
     }
 
     #define LD_THRESHOLD (8*1024)
@@ -671,13 +831,51 @@ long GPU_dmaChain(uint32_t *rambase, uint32_t start_addr)
     }
   }
 
+#if QPSX_GPU_DMA_CHAIN_FAST
+  if (chain_fast) {
+    if (chain_saw_node) {
+      qpsx_gpu_finish_cmd_buffer(chain_dirty, chain_old_e3);
+      PROFILE_END(PROF_GPU_TOTAL);
+    }
+  }
+#endif
+
+#if QPSX_PHASE_METRICS
+  QPSX_PHASE_DMA(dma_nodes, dma_nonempty, dma_words, (unsigned)cpu_cycles,
+                 dma_eligible, dma_batched, dma_fallback);
+#endif
+
   gpu.state.last_list.frame = *gpu.state.frame_count;
   gpu.state.last_list.hcnt = *gpu.state.hcnt;
   gpu.state.last_list.cycles = cpu_cycles;
   gpu.state.last_list.addr = start_addr;
-
   return cpu_cycles;
 }
+
+#if QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+/* Keep only transfer operations reachable from the cold deferred parser out
+ * of the legacy gpu.o parser loop.  Legacy node processing calls remain the
+ * original do_cmd_buffer call directly in GPU_dmaChain. */
+noinline int qpsx_gpu_adaptive_do_vram_io(uint32_t *data, int count,
+                                          int is_read)
+{
+  return do_vram_io(data, count, is_read);
+}
+
+noinline void qpsx_gpu_adaptive_start_vram_transfer(uint32_t pos_word,
+                                                    uint32_t size_word,
+                                                    int is_read)
+{
+  start_vram_transfer(pos_word, size_word, is_read);
+}
+
+/* Only the cold/error arm of the out-of-line walker reaches this bridge.
+ * Ordinary predicted-light frames retain the direct historical call. */
+noinline int qpsx_gpu_adaptive_legacy_cmd_buffer(uint32_t *data, int count)
+{
+  return do_cmd_buffer(data, count);
+}
+#endif
 
 void GPU_readDataMem(uint32_t *mem, int count)
 {

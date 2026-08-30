@@ -147,4 +147,18 @@ void psxMemWrite8_direct(u32 mem, u8 value,void *regs);
 void psxMemWrite16_direct(u32 mem, u16 value,void *regs);
 void psxMemWrite32_direct(u32 mem, u32 value,void *regs);
 
+#if defined(QPSX_MIPS_ASM_MEM_READS) && QPSX_MIPS_ASM_MEM_READS
+/* Optional HC15xx helper ABI. Writes remain in C so cache-control and
+ * self-modifying-code invalidation side effects stay unchanged. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+u32 psxMemRead32_asm(u32 mem);
+u16 psxMemRead16_asm(u32 mem);
+u8  psxMemRead8_asm(u32 mem);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 #endif /* __PSXMEMORY_H__ */

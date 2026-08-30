@@ -36,6 +36,493 @@
                                    //  that wouldn't end up displayed on
                                    //  low-res screen using simple downscaler)
 
+/* Runtime renderer diagnostics are deliberately opt-in.  The production
+ * core keeps these declarations and all associated updates out of the
+ * generated inner loops; a metrics core uses them to weight driver variants
+ * by the number of spans/pixels they actually process. */
+#ifndef QPSX_GPU_RUNTIME_METRICS
+#define QPSX_GPU_RUNTIME_METRICS 0
+#endif
+#ifndef QPSX_GPU_LINEAR_4BPP
+#define QPSX_GPU_LINEAR_4BPP 0
+#endif
+#ifndef QPSX_GPU_PACKED_TILE_WRITES
+#define QPSX_GPU_PACKED_TILE_WRITES 0
+#endif
+#ifndef QPSX_GPU_PACKED_SPRITE_4BPP
+#define QPSX_GPU_PACKED_SPRITE_4BPP 0
+#endif
+#ifndef QPSX_GPU_PACKED_POLY_WRITES
+#define QPSX_GPU_PACKED_POLY_WRITES 0
+#endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_FLATV
+#define QPSX_GPU_4BPP_GOURAUD_FLATV 0
+#endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS
+#define QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_CACHE
+#define QPSX_GPU_4BPP_GOURAUD_CACHE 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV
+#define QPSX_GPU_4BPP_FLATV 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW
+#define QPSX_GPU_4BPP_FLATV_ROW 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_PALETTE_LUT
+#define QPSX_GPU_4BPP_PALETTE_LUT 0
+#endif
+#ifndef QPSX_GPU_HOT_DRIVER_ORDER
+#define QPSX_GPU_HOT_DRIVER_ORDER 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK
+#define QPSX_GPU_4BPP_FULLMASK 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS
+#define QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
+#define QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL
+#define QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL 0
+#endif
+#ifndef QPSX_GPU_GOURAUD_LINE_FLATFAST
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST 0
+#endif
+#ifndef QPSX_GPU_POLY_2043_FAST
+#define QPSX_GPU_POLY_2043_FAST 0
+#endif
+#if QPSX_GPU_4BPP_PALETTE_LUT
+#if defined(__GNUC__)
+#define QPSX_GPU_PALETTE_LUT_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_PALETTE_LUT_NOINLINE
+#endif
+static QPSX_GPU_PALETTE_LUT_NOINLINE void
+qpsx_gpu_prepare_4bpp_palette_lut(const gpu_unai_t &gpu_unai)
+{
+	if (gpu_unai.CBA4PackedValid)
+		return;
+	const u16 *cba = gpu_unai.CBA;
+	for (u32 packed = 0; packed < 256; ++packed) {
+		gpu_unai.CBA4Packed[packed] =
+			(u32)cba[packed & 0xfu] |
+			((u32)cba[packed >> 4] << 16);
+	}
+	gpu_unai.CBA4PackedValid = true;
+}
+#undef QPSX_GPU_PALETTE_LUT_NOINLINE
+#endif
+#if QPSX_GPU_RUNTIME_METRICS
+extern u32 qpsx_gpu_poly_span_hist[2048];
+extern u32 qpsx_gpu_poly_pixel_hist[2048];
+extern u32 qpsx_gpu_sprite_pixel_hist[256];
+extern u32 qpsx_gpu_tile_pixel_hist[32];
+extern u32 qpsx_gpu_poly_fullmask_spans;
+extern u32 qpsx_gpu_poly_fullmask_pixels;
+extern u32 qpsx_gpu_poly_unit_u_spans;
+extern u32 qpsx_gpu_poly_unit_u_pixels;
+extern u32 qpsx_gpu_poly_flat_v_spans;
+extern u32 qpsx_gpu_poly_flat_v_pixels;
+extern u32 qpsx_gpu_line_g_total;
+extern u32 qpsx_gpu_line_g_flatfast;
+#endif
+
+#if QPSX_GPU_4BPP_FLATV
+/*
+ * The dominant Ridge Racer polygon driver is CF=32: opaque, unlit 4bpp.
+ * For a normal horizontal span V is constant and the texture window is the
+ * full 256x256 page.  The generic loop still masks U and V and recomputes the
+ * byte-row address for every pixel.  This path proves that U will not wrap
+ * during the span once, then keeps a row pointer and only advances U.  It is
+ * deliberately restricted to CF=32 callers; all window, wrap, blend, mask,
+ * lighting, and Gouraud cases retain the exact original loop.  The helper is
+ * out-of-line and only considered for long spans: putting the proof and the
+ * paired-byte loop into the CF=32 hot function enlarged its instruction
+ * footprint enough to lose on a 16 KiB I-cache even when it saved pixels.
+ */
+#if defined(__GNUC__)
+#define QPSX_GPU_FLATV_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_FLATV_NOINLINE
+#endif
+static QPSX_GPU_FLATV_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_flatv(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
+{
+	const u32 full_mask = ((255u << FIXED_BITS) | fixed_LOMASK);
+	if (!count)
+		return true;
+	if (gpu_unai.u_msk != full_mask || gpu_unai.v_msk != full_mask ||
+		gpu_unai.v_inc != 0)
+		return false;
+
+	const u32 l_u = gpu_unai.u & full_mask;
+	const s32 u_inc = gpu_unai.u_inc;
+	const bool unit_u = (u_inc == (1 << FIXED_BITS));
+	if (unit_u) {
+		const u32 tu = l_u >> FIXED_BITS;
+		if (tu >= 256u || count > 256u - tu)
+			return false;
+	} else if (count > 1) {
+		const u32 steps = count - 1;
+		if (u_inc > 0) {
+			const unsigned long long distance =
+				(unsigned long long)steps * (u32)u_inc;
+			if (distance > (unsigned long long)(full_mask - l_u))
+				return false;
+		} else if (u_inc < 0) {
+			const u32 magnitude = (u32)(-(u_inc + 1)) + 1u;
+			const unsigned long long distance =
+				(unsigned long long)steps * magnitude;
+			if (distance > (unsigned long long)l_u)
+				return false;
+		}
+	}
+
+	const u8 *row = ((const u8 *)gpu_unai.TBA) +
+				(((gpu_unai.v & full_mask) >> FIXED_BITS) << 11);
+	#if !QPSX_GPU_4BPP_PALETTE_LUT
+	const u16 *cba = gpu_unai.CBA;
+	#endif
+	u32 tex_u = l_u;
+#if QPSX_GPU_4BPP_PALETTE_LUT
+	qpsx_gpu_prepare_4bpp_palette_lut(gpu_unai);
+	const u32 *cba4 = gpu_unai.CBA4Packed;
+#endif
+	if (unit_u) {
+		u32 tu = l_u >> FIXED_BITS;
+		u8 *packed_row = (u8 *)row + (tu >> 1);
+		if (tu & 1u) {
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u32 pair = cba4[*packed_row];
+			const u16 src = (u16)(pair >> 16);
+		#else
+			const u16 src = cba[*packed_row >> 4];
+		#endif
+			if (src)
+				*pDst = src;
+			++pDst;
+			++packed_row;
+			--count;
+		}
+		while (count >= 2) {
+			const u8 packed = *packed_row++;
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u32 pair = cba4[packed];
+			const u16 src0 = (u16)pair;
+			const u16 src1 = (u16)(pair >> 16);
+		#else
+			const u16 src0 = cba[packed & 0xf];
+			const u16 src1 = cba[packed >> 4];
+		#endif
+			if (src0)
+				pDst[0] = src0;
+			if (src1)
+				pDst[1] = src1;
+			pDst += 2;
+			count -= 2;
+		}
+		if (count) {
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u16 src = (u16)cba4[*packed_row & 0xfu];
+		#else
+			const u16 src = cba[*packed_row & 0xf];
+		#endif
+			if (src)
+				*pDst = src;
+		}
+		return true;
+	}
+
+	do {
+		const u32 tu = tex_u >> FIXED_BITS;
+	#if QPSX_GPU_4BPP_PALETTE_LUT
+		const u32 pair = cba4[row[tu >> 1]];
+		const u16 src = (u16)(pair >> ((tu & 1u) << 4));
+	#else
+		const u8 packed = row[tu >> 1];
+		const u16 src = cba[(packed >> ((tu & 1) << 2)) & 0xf];
+	#endif
+		if (src)
+			*pDst = src;
+		++pDst;
+		tex_u += u_inc;
+	} while (--count);
+	return true;
+}
+#undef QPSX_GPU_FLATV_NOINLINE
+#endif
+
+#if QPSX_GPU_4BPP_FLATV_ROW
+/*
+ * The previous CF=32 flat-V experiment required the full 256x256 texture
+ * window and proved that U could not wrap.  That proof made the fast path
+ * miss many of the measured flat-V pixels.  This variant keeps the same
+ * exact texture-window semantics as the generic loop: it masks U once per
+ * texel, but hoists the constant V row address out of the loop.  It is
+ * intentionally out-of-line so the common renderer's I-cache footprint does
+ * not grow on a 16 KiB MIPS cache.  No blend, mask, lighting, or Gouraud work
+ * is present for CF=32, so a zero CLUT entry remains the only skipped pixel.
+ */
+#if defined(__GNUC__)
+#define QPSX_GPU_FLATV_ROW_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_FLATV_ROW_NOINLINE
+#endif
+static QPSX_GPU_FLATV_ROW_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_flatv_row(const gpu_unai_t &gpu_unai,
+					  u16 *pDst, u32 count)
+{
+	if (!count || gpu_unai.v_inc != 0)
+		return false;
+
+	u32 l_u = gpu_unai.u & gpu_unai.u_msk;
+	const u32 u_msk = gpu_unai.u_msk;
+	const s32 u_inc = gpu_unai.u_inc;
+	const u8 *row = ((const u8 *)gpu_unai.TBA) +
+				(((gpu_unai.v & gpu_unai.v_msk) << 1) & (0xffu << 11));
+	const u16 *cba = gpu_unai.CBA;
+
+	/* The common unit-U case consumes two texels from one source byte.  Only
+	 * use the paired loop when the texture-window mask cannot wrap during the
+	 * span; the general loop below is exact for every other increment/window. */
+	if (u_inc == (1 << FIXED_BITS)) {
+		const u32 texel = l_u >> FIXED_BITS;
+		const u32 max_texel = u_msk >> FIXED_BITS;
+		if (texel <= max_texel && count <= max_texel - texel + 1u) {
+			const u8 *packed_row = row + (texel >> 1);
+			if (texel & 1u) {
+				const u16 src = cba[*packed_row >> 4];
+				if (src)
+					*pDst = src;
+				++pDst;
+				++packed_row;
+				--count;
+			}
+			while (count >= 2) {
+				const u8 packed = *packed_row++;
+				const u16 src0 = cba[packed & 0xf];
+				const u16 src1 = cba[packed >> 4];
+				if (src0)
+					pDst[0] = src0;
+				if (src1)
+					pDst[1] = src1;
+				pDst += 2;
+				count -= 2;
+			}
+			if (count) {
+				const u16 src = cba[*packed_row & 0xf];
+				if (src)
+					*pDst = src;
+			}
+			return true;
+		}
+	}
+
+	do {
+		const u32 tu = l_u >> FIXED_BITS;
+		const u8 packed = row[tu >> 1];
+		const u16 src = cba[(packed >> ((tu & 1u) << 2)) & 0xf];
+		if (src)
+			*pDst = src;
+		++pDst;
+		l_u = (l_u + u_inc) & u_msk;
+	} while (--count);
+	return true;
+}
+#undef QPSX_GPU_FLATV_ROW_NOINLINE
+#endif
+
+#if QPSX_GPU_4BPP_FULLMASK
+/* Full texture windows are common in the measured scene.  When the fixed
+ * point endpoints prove that neither coordinate wraps during a span, the
+ * two per-pixel texture-window masks are redundant.  Keep this helper
+ * out-of-line: the proof is cold, while the compact loop saves the masks and
+ * the V-row address calculation from every CF=32 pixel. */
+#if defined(__GNUC__)
+#define QPSX_GPU_FULLMASK_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_FULLMASK_NOINLINE
+#endif
+static QPSX_GPU_FULLMASK_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_fullmask(const gpu_unai_t &gpu_unai,
+					 u16 *pDst, u32 count)
+{
+	const u32 full_mask = ((255u << FIXED_BITS) | fixed_LOMASK);
+	const u32 u_inc = (u32)gpu_unai.u_inc;
+	const u32 v_inc = (u32)gpu_unai.v_inc;
+	u32 l_u;
+	u32 l_v;
+
+	if (!count || gpu_unai.u_msk != full_mask ||
+		gpu_unai.v_msk != full_mask)
+		return false;
+	l_u = gpu_unai.u & full_mask;
+	l_v = gpu_unai.v & full_mask;
+	const bool flat_unit_u = (v_inc == 0 && u_inc == (1u << FIXED_BITS));
+	if (flat_unit_u) {
+		const u32 texel = l_u >> FIXED_BITS;
+		if (texel >= 256u || count > 256u - texel)
+			return false;
+	} else if (count > 1) {
+		const u32 steps = count - 1u;
+		const s32 inc_u = (s32)u_inc;
+		const s32 inc_v = (s32)v_inc;
+		/* Compare the positive travel distance against the available
+		 * endpoint room.  Unsigned products let MIPS use one 32x32
+		 * multu per coordinate instead of the signed 64-bit endpoint
+		 * arithmetic that this cold proof used originally. */
+		if (inc_u > 0) {
+			const uint64_t distance = (uint64_t)(u32)inc_u * steps;
+			if (distance > (uint64_t)(full_mask - l_u))
+				return false;
+		} else if (inc_u < 0) {
+			const uint64_t distance = (uint64_t)(0u - u_inc) * steps;
+			if (distance > (uint64_t)l_u)
+				return false;
+		}
+		if (inc_v > 0) {
+			const uint64_t distance = (uint64_t)(u32)inc_v * steps;
+			if (distance > (uint64_t)(full_mask - l_v))
+				return false;
+		} else if (inc_v < 0) {
+			const uint64_t distance = (uint64_t)(0u - v_inc) * steps;
+			if (distance > (uint64_t)l_v)
+				return false;
+		}
+	}
+
+	const u8 *texture = (const u8 *)gpu_unai.TBA;
+	const u16 *cba = gpu_unai.CBA;
+	/* Flat-V/unit-U spans are the best case: one texture row and two texels
+	 * arrive in each source byte.  This is kept inside the out-of-line helper
+	 * so the normal CF=32 driver does not grow on the target's tiny I-cache. */
+	if (flat_unit_u) {
+		const u32 tu = l_u >> FIXED_BITS;
+		const u8 *packed_row = texture + ((l_v >> FIXED_BITS) << 11) + (tu >> 1);
+		if (tu & 1u) {
+			const u16 src = cba[*packed_row >> 4];
+			if (src)
+				*pDst = src;
+			++pDst;
+			++packed_row;
+			--count;
+		}
+	#if QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
+		/* The CF=32 path has no blend, mask, or lighting side effects. Once
+		 * the span is on a 32-bit boundary, two opaque RGB555 texels can be
+		 * committed with one store. Keep transparent pairs on the exact
+		 * per-pixel fallback because a zero CLUT entry must leave VRAM alone.
+		 * The alignment peel is outside the pair loop so the MIPS target does
+		 * not pay an alignment test for every two pixels. */
+		if (((uintptr_t)pDst & 2u) && count) {
+			const u16 src = cba[*packed_row & 0xfu];
+			if (src)
+				*pDst = src;
+			++pDst;
+			++packed_row;
+			--count;
+		}
+	#endif
+	#if QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES && QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL
+		/* Once alignment and the odd-pixel tail are peeled, consume two
+		 * source bytes at a time.  This keeps the same transparent-entry
+		 * fallback as the pair kernel while cutting the loop branch/count
+		 * update frequency in half.  The unrolled body lives in this cold
+		 * helper, so it does not enlarge the CF=32 dispatch template. */
+		while (count >= 4) {
+			const u8 packed0 = *packed_row++;
+			const u8 packed1 = *packed_row++;
+			const u16 src00 = cba[packed0 & 0xfu];
+			const u16 src01 = cba[packed0 >> 4];
+			const u16 src10 = cba[packed1 & 0xfu];
+			const u16 src11 = cba[packed1 >> 4];
+			if (src00 && src01)
+				*(u32 *)(void *)pDst = (u32)src00 | ((u32)src01 << 16);
+			else {
+				if (src00)
+					pDst[0] = src00;
+				if (src01)
+					pDst[1] = src01;
+			}
+			if (src10 && src11)
+				*(u32 *)(void *)(pDst + 2) = (u32)src10 | ((u32)src11 << 16);
+			else {
+				if (src10)
+					pDst[2] = src10;
+				if (src11)
+					pDst[3] = src11;
+			}
+			pDst += 4;
+			count -= 4;
+		}
+	#endif
+		while (count >= 2) {
+			const u8 packed = *packed_row++;
+			const u16 src0 = cba[packed & 0xfu];
+			const u16 src1 = cba[packed >> 4];
+		#if QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
+			if (src0 && src1)
+				*(u32 *)(void *)pDst = (u32)src0 | ((u32)src1 << 16);
+			else {
+				if (src0)
+					pDst[0] = src0;
+				if (src1)
+					pDst[1] = src1;
+			}
+		#else
+			if (src0)
+				pDst[0] = src0;
+			if (src1)
+				pDst[1] = src1;
+		#endif
+			pDst += 2;
+			count -= 2;
+		}
+		if (count) {
+			const u16 src = cba[*packed_row & 0xfu];
+			if (src)
+				*pDst = src;
+		}
+		return true;
+	}
+	if (v_inc == 0) {
+		const u8 *row = texture + ((l_v >> FIXED_BITS) << 11);
+		do {
+			const u32 tu = l_u >> FIXED_BITS;
+			const u8 packed = row[tu >> 1];
+			const u16 src = cba[(packed >> ((tu & 1u) << 2)) & 0xfu];
+			if (src)
+				*pDst = src;
+			++pDst;
+			l_u += u_inc;
+		} while (--count);
+		return true;
+	}
+	do {
+		const u32 tu = l_u >> FIXED_BITS;
+		const u32 tv = l_v >> FIXED_BITS;
+		const u8 packed = texture[(tv << 11) + (tu >> 1)];
+		const u16 src = cba[(packed >> ((tu & 1u) << 2)) & 0xfu];
+		if (src)
+			*pDst = src;
+		++pDst;
+		l_u += u_inc;
+		l_v += v_inc;
+	} while (--count);
+	return true;
+}
+#undef QPSX_GPU_FULLMASK_NOINLINE
+#endif
+
 #ifdef __arm__
 #ifndef ENABLE_GPU_ARMV7
 /* ARMv5 */
@@ -53,6 +540,351 @@
 
 // QPSX v091: MIPS32 Assembly optimizations
 #include "gpu_inner_mips32.h"
+#include "gpu_poly2043_fast.h"
+
+#if QPSX_GPU_POLY_2043_FAST
+/*
+ * Compact specialization for the measured 16bpp Gouraud polygon driver.
+ *
+ * CF 2043 is: lighting + blending mode 3 + 16bpp texture + Gouraud + mask
+ * set + dithering + display blit mask.  The loop itself lives in
+ * gpu_poly2043_fast.h and is always inlined into this CF-specific template
+ * instantiation.  The ordinary template remains small, while this
+ * single-purpose loop does not replicate its runtime decisions.  Every
+ * operation is copied from the CF=2043 arm of gpuPolySpanFn; the changed
+ * representation carries the scanline-local dither/blit X instead of
+ * deriving it from a destination pointer per pixel.
+ */
+struct qpsx_gpu_poly2043_light_policy {
+	GPU_INLINE u32 apply(u16 texel, u32 g_col)
+	{
+		return gpuLightingTXT24Gouraud(texel, g_col);
+	}
+};
+struct qpsx_gpu_poly2043_blend_policy {
+	GPU_INLINE u32 apply(u32 src24, u16 dst)
+	{
+#if QPSX_GPU_FIXED_FAST_PATH
+		return gpuBlending24Fast_Mode3(src24, dst);
+#else
+		return gpuBlending24<3>(src24, dst);
+#endif
+	}
+};
+struct qpsx_gpu_poly2043_quant_policy {
+	GPU_INLINE u16 apply(u32 src24, u32 dither)
+	{
+		return gpuColorQuantization24WithDither<1>(src24, dither);
+	}
+};
+#endif
+
+#if QPSX_GPU_LINEAR_4BPP
+/*
+ * A large Ridge Racer workload uses the unlit 4bpp polygon driver (CF=32).
+ * When a span walks one texel at a time along a constant texture row, two
+ * texels share one source byte.  The normal loop recomputes the fixed-point
+ * address and reloads that byte for every pixel.  This helper handles only
+ * the provable linear/no-wrap case and returns false for every other texture
+ * window, so correctness falls back to the normal renderer.
+ */
+static inline bool qpsx_gpu_poly_span_4bpp_linear(const gpu_unai_t &gpu_unai,
+                                                  u16 *pDst, u32 count)
+{
+	const u32 full_mask = ((255u << FIXED_BITS) | fixed_LOMASK);
+	const s32 unit_u = (1 << FIXED_BITS);
+	const u32 l_u = gpu_unai.u & gpu_unai.u_msk;
+	const u32 l_v = gpu_unai.v & gpu_unai.v_msk;
+	if (gpu_unai.u_msk != full_mask || gpu_unai.v_msk != full_mask ||
+		gpu_unai.u_inc != unit_u || gpu_unai.v_inc != 0 ||
+		(l_u >> FIXED_BITS) + count > 256)
+		return false;
+
+	const u8 *row = ((const u8 *)gpu_unai.TBA) +
+				((l_v << 1) & (0xffu << 11));
+	const u16 *cba = gpu_unai.CBA;
+	u32 tu = l_u >> FIXED_BITS;
+
+	/* Consume an odd starting texel before the paired byte loop. */
+	if (count && (tu & 1)) {
+		u16 src = cba[*row >> 4];
+		if (src) *pDst = src;
+		++pDst;
+		++tu;
+		--count;
+		++row;
+	}
+
+	while (count >= 2) {
+		const u8 packed = *row++;
+		u16 src = cba[packed & 0x0f];
+		if (src) pDst[0] = src;
+		src = cba[packed >> 4];
+		if (src) pDst[1] = src;
+		pDst += 2;
+		tu += 2;
+		count -= 2;
+	}
+	if (count) {
+		u16 src = cba[*row & 0x0f];
+		if (src) *pDst = src;
+	}
+	return true;
+}
+#endif
+
+#if QPSX_GPU_4BPP_GOURAUD_FLATV
+#if defined(__GNUC__)
+#define QPSX_GPU_GOURAUD_FLATV_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_GOURAUD_FLATV_NOINLINE
+#endif
+#if QPSX_GPU_4BPP_GOURAUD_CACHE
+/* The fast Gouraud operation only consumes these three quantized 5-bit
+ * light values from gCol. Cache the sixteen CLUT results while that key is
+ * unchanged. The cache is deliberately a 32-byte span-local object rather
+ * than a 1 KiB global table: this keeps the working set friendly to the
+ * SF2000's tiny D-cache and avoids rebuilding a full table for short spans. */
+static inline u32 qpsx_gpu_gouraud_light_key(u32 gCol)
+{
+	return (gCol >> 27) |
+	       (((gCol >> 16) & 0x1fu) << 5) |
+	       (((gCol >> 5) & 0x1fu) << 10);
+}
+
+static inline u16 qpsx_gpu_gouraud_cache_color(u16 src, u32 index,
+						 u32 gCol, u16 *palette,
+						 u32 *valid_mask)
+{
+	const u32 bit = 1u << index;
+	if (!(*valid_mask & bit)) {
+		palette[index] = src ?
+			(gpuLightingTXTGouraud_Fast(src, gCol) | (src & 0x8000)) : 0;
+		*valid_mask |= bit;
+	}
+	return palette[index];
+}
+#endif
+/* CF=161 is the measured lit 4bpp driver.  Accept only a full 256x256
+ * window, constant V, unit U, and a span proven not to wrap. */
+static QPSX_GPU_GOURAUD_FLATV_NOINLINE bool
+qpsx_gpu_poly_span_4bpp_gouraud_flatv(const gpu_unai_t &gpu_unai,
+						      u16 *pDst, u32 count)
+{
+	const u32 full_mask = ((255u << FIXED_BITS) | fixed_LOMASK);
+	if (!count || gpu_unai.u_msk != full_mask ||
+	    gpu_unai.v_msk != full_mask || gpu_unai.v_inc != 0 ||
+	    gpu_unai.u_inc != (1 << FIXED_BITS))
+		return false;
+	const u32 texel = (gpu_unai.u & full_mask) >> FIXED_BITS;
+	if (texel >= 256u || count > 256u - texel)
+		return false;
+
+	const u8 *row = ((const u8 *)gpu_unai.TBA) +
+				(((gpu_unai.v & full_mask) >> FIXED_BITS) << 11);
+	const u16 *cba = gpu_unai.CBA;
+	u32 l_gCol = gpu_unai.gCol;
+	const u32 l_gInc = gpu_unai.gInc;
+#if QPSX_GPU_4BPP_GOURAUD_CACHE
+	/* This look-ahead is only a profitability gate. Every lookup below still
+	 * checks the exact quantized key, so a crossing at any later pixel remains
+	 * pixel-identical to the direct fast-lighting path. */
+	const u32 first_key = qpsx_gpu_gouraud_light_key(l_gCol);
+	const u32 probe_key = qpsx_gpu_gouraud_light_key(l_gCol + (l_gInc << 2));
+	if (first_key == probe_key) {
+		u16 palette[16];
+		u32 valid_mask = 0;
+		u32 cache_key = ~0u;
+		if (texel & 1u) {
+			const u32 key = qpsx_gpu_gouraud_light_key(l_gCol);
+			if (key != cache_key) {
+				cache_key = key;
+				valid_mask = 0;
+			}
+			const u32 index = *row++ >> 4;
+			const u16 src = cba[index];
+			if (src)
+				*pDst = qpsx_gpu_gouraud_cache_color(src, index, l_gCol,
+								     palette, &valid_mask);
+			++pDst;
+			l_gCol += l_gInc;
+			--count;
+		}
+		const bool pair_aligned = !((uintptr_t)pDst & 2u);
+		if (pair_aligned) {
+			while (count >= 2) {
+				const u8 packed = *row++;
+				const u32 key0 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key0 != cache_key) {
+					cache_key = key0;
+					valid_mask = 0;
+				}
+				const u32 index0 = packed & 0xfu;
+				const u16 src0 = cba[index0];
+				u16 out0 = 0;
+				if (src0)
+					out0 = qpsx_gpu_gouraud_cache_color(src0, index0, l_gCol,
+									       palette, &valid_mask);
+				l_gCol += l_gInc;
+				const u32 key1 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key1 != cache_key) {
+					cache_key = key1;
+					valid_mask = 0;
+				}
+				const u32 index1 = packed >> 4;
+				const u16 src1 = cba[index1];
+				u16 out1 = 0;
+				if (src1)
+					out1 = qpsx_gpu_gouraud_cache_color(src1, index1, l_gCol,
+									       palette, &valid_mask);
+				l_gCol += l_gInc;
+				if (src0 && src1)
+					*(u32 *)pDst = (u32)out0 | ((u32)out1 << 16);
+				else {
+					if (src0) pDst[0] = out0;
+					if (src1) pDst[1] = out1;
+				}
+				pDst += 2;
+				count -= 2;
+			}
+		} else {
+			while (count >= 2) {
+				const u8 packed = *row++;
+				const u32 key0 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key0 != cache_key) {
+					cache_key = key0;
+					valid_mask = 0;
+				}
+				const u32 index0 = packed & 0xfu;
+				const u16 src0 = cba[index0];
+				if (src0)
+					pDst[0] = qpsx_gpu_gouraud_cache_color(src0, index0, l_gCol,
+									      palette, &valid_mask);
+				l_gCol += l_gInc;
+				const u32 key1 = qpsx_gpu_gouraud_light_key(l_gCol);
+				if (key1 != cache_key) {
+					cache_key = key1;
+					valid_mask = 0;
+				}
+				const u32 index1 = packed >> 4;
+				const u16 src1 = cba[index1];
+				if (src1)
+					pDst[1] = qpsx_gpu_gouraud_cache_color(src1, index1, l_gCol,
+									      palette, &valid_mask);
+				l_gCol += l_gInc;
+				pDst += 2;
+				count -= 2;
+			}
+		}
+		if (count) {
+			const u32 key = qpsx_gpu_gouraud_light_key(l_gCol);
+			if (key != cache_key) {
+				cache_key = key;
+				valid_mask = 0;
+			}
+			const u32 index = *row & 0xfu;
+			const u16 src = cba[index];
+			if (src)
+				*pDst = qpsx_gpu_gouraud_cache_color(src, index, l_gCol,
+								     palette, &valid_mask);
+		}
+		return true;
+	}
+#endif
+	if (texel & 1u) {
+		const u16 src = cba[*row++ >> 4];
+		if (src)
+			*pDst = gpuLightingTXTGouraud_Fast(src, l_gCol) |
+				(src & 0x8000);
+		++pDst;
+		l_gCol += l_gInc;
+		--count;
+	}
+
+	const bool pair_aligned = !((uintptr_t)pDst & 2u);
+	if (pair_aligned) {
+		while (count >= 2) {
+			const u8 packed = *row++;
+			const u16 src0 = cba[packed & 0xf];
+			const u16 src1 = cba[packed >> 4];
+			u16 out0 = 0, out1 = 0;
+			if (src0)
+				out0 = gpuLightingTXTGouraud_Fast(src0, l_gCol) |
+					(src0 & 0x8000);
+			l_gCol += l_gInc;
+			if (src1)
+				out1 = gpuLightingTXTGouraud_Fast(src1, l_gCol) |
+					(src1 & 0x8000);
+			l_gCol += l_gInc;
+			if (src0 && src1)
+				*(u32 *)pDst = (u32)out0 | ((u32)out1 << 16);
+			else {
+				if (src0) pDst[0] = out0;
+				if (src1) pDst[1] = out1;
+			}
+			pDst += 2;
+			count -= 2;
+		}
+	} else {
+		while (count >= 2) {
+			const u8 packed = *row++;
+			const u16 src0 = cba[packed & 0xf];
+			const u16 src1 = cba[packed >> 4];
+			if (src0)
+				pDst[0] = gpuLightingTXTGouraud_Fast(src0, l_gCol) |
+					(src0 & 0x8000);
+			l_gCol += l_gInc;
+			if (src1)
+				pDst[1] = gpuLightingTXTGouraud_Fast(src1, l_gCol) |
+					(src1 & 0x8000);
+			l_gCol += l_gInc;
+			pDst += 2;
+			count -= 2;
+		}
+	}
+	if (count) {
+		const u16 src = cba[*row & 0xf];
+		if (src)
+			*pDst = gpuLightingTXTGouraud_Fast(src, l_gCol) |
+				(src & 0x8000);
+	}
+	return true;
+}
+#undef QPSX_GPU_GOURAUD_FLATV_NOINLINE
+#endif
+
+#if QPSX_GPU_PACKED_POLY_WRITES
+#if defined(__GNUC__)
+#define QPSX_GPU_POLY_PACK_NOINLINE __attribute__((noinline))
+#else
+#define QPSX_GPU_POLY_PACK_NOINLINE
+#endif
+static QPSX_GPU_POLY_PACK_NOINLINE void
+qpsx_gpu_fill_flat_poly(u16 *pDst, u32 count, u16 data)
+{
+	if (count && ((uintptr_t)pDst & 2u)) {
+		*pDst++ = data;
+		--count;
+	}
+	const u32 packed = (u32)data | ((u32)data << 16);
+	u32 *pDst32 = (u32 *)pDst;
+	while (count >= 8) {
+		pDst32[0] = packed;
+		pDst32[1] = packed;
+		pDst32[2] = packed;
+		pDst32[3] = packed;
+		pDst32 += 4;
+		count -= 8;
+	}
+	while (count >= 2) {
+		*pDst32++ = packed;
+		count -= 2;
+	}
+	if (count)
+		*(u16 *)pDst32 = data;
+}
+#undef QPSX_GPU_POLY_PACK_NOINLINE
+#endif
 
 // If defined, Gouraud colors are fixed-point 5.11, otherwise they are 8.16
 // This is only for debugging/verification of low-precision colors in C.
@@ -62,6 +894,16 @@
 // QPSX v089: Enable for SF2000 - fewer bits = faster math, minor visual difference
 #if defined(SF2000) || defined(__mips__)
 #define GPU_GOURAUD_LOW_PRECISION
+#endif
+
+/* The flat-line shortcut is exact only with the five-bit channel
+ * quantization used by the SF2000/MIPS build. Keep an experimental request
+ * disabled on desktop/high-precision builds rather than changing rendering
+ * semantics there. */
+#if QPSX_GPU_GOURAUD_LINE_FLATFAST && defined(GPU_GOURAUD_LOW_PRECISION)
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE 1
+#else
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE 0
 #endif
 
 // How many bits of fixed-point precision GouraudColor uses
@@ -278,8 +1120,44 @@ const PSD gpuPixelSpanDrivers[64] =
 template<int CF>
 static void gpuTileSpanFn(u16 *pDst, u32 count, u16 data)
 {
+#if QPSX_GPU_RUNTIME_METRICS
+	qpsx_gpu_tile_pixel_hist[CF] += count;
+#endif
 	if (!CF_MASKCHECK && !CF_BLEND) {
 		if (CF_MASKSET) { data = data | 0x8000; }
+		/* CF=0 is the overwhelmingly common opaque tile fill.  The normal
+		 * eight-halfword unroll still spends one store instruction per pixel.
+		 * On the little-endian SF2000 framebuffer, align once and write two
+		 * identical pixels with one 32-bit store.  The odd-pixel prefix/suffix
+		 * keeps this exact for every x alignment and the option is disabled for
+		 * other ports by default. */
+#if QPSX_GPU_PACKED_TILE_WRITES
+		if (CF == 0 && !CF_MASKSET) {
+			if (count && ((uintptr_t)pDst & 2u)) {
+				*pDst++ = data;
+				--count;
+			}
+			const u32 packed = (u32)data | ((u32)data << 16);
+			u32 *pDst32 = (u32 *)pDst;
+			/* Keep the branch rate of the old eight-pixel unroll while
+			 * retaining the two-pixels-per-store reduction. */
+			while (count >= 8) {
+				pDst32[0] = packed;
+				pDst32[1] = packed;
+				pDst32[2] = packed;
+				pDst32[3] = packed;
+				pDst32 += 4;
+				count -= 8;
+			}
+			while (count >= 2) {
+				*pDst32++ = packed;
+				count -= 2;
+			}
+			pDst = (u16 *)pDst32;
+			if (count) *pDst = data;
+			return;
+		}
+#endif
 		// QPSX v089: 8x loop unroll for tile fills - significant speedup
 		while (count >= 8) {
 			pDst[0] = data; pDst[1] = data;
@@ -364,6 +1242,9 @@ const PT gpuTileSpanDrivers[32] = {
 template<int CF>
 static void gpuSpriteSpanFn(u16 *pDst, u32 count, u8* pTxt, u32 u0)
 {
+#if QPSX_GPU_RUNTIME_METRICS
+	qpsx_gpu_sprite_pixel_hist[CF] += count;
+#endif
 	// Blend func can save an operation if it knows uSrc MSB is unset.
 	//  Untextured prims can always skip (source color always comes with MSB=0).
 	//  For textured prims, lighting funcs always return it unset. (bonus!)
@@ -385,6 +1266,59 @@ static void gpuSpriteSpanFn(u16 *pDst, u32 count, u8* pTxt, u32 u0)
 	}
 
 	const u16 *CBA_; if (CF_TEXTMODE!=3) CBA_ = gpu_unai.CBA;
+
+#if QPSX_GPU_PACKED_SPRITE_4BPP
+	/* Most sprites in the Ridge Racer scene are opaque, unlit 4bpp (CF=32).
+	 * With the default texture window, two adjacent texels share one byte.
+	 * Handle only a complete, non-wrapping run so transparent texels and all
+	 * texture-window corner cases retain the generic renderer's behavior. */
+	if (CF == 0x20 && u0_mask == 255u && u0 <= 255u &&
+		count <= 256u - u0) {
+	#if QPSX_GPU_4BPP_PALETTE_LUT
+		qpsx_gpu_prepare_4bpp_palette_lut(gpu_unai);
+		const u32 *CBA4_ = gpu_unai.CBA4Packed;
+	#endif
+		u32 tu = u0;
+		if (tu & 1u) {
+			const u8 packed = pTxt[tu >> 1];
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u16 src = (u16)(CBA4_[packed] >> 16);
+		#else
+			const u16 src = CBA_[packed >> 4];
+		#endif
+			if (src) *pDst = src;
+			++pDst;
+			++tu;
+			--count;
+		}
+		while (count >= 2) {
+			const u8 packed = pTxt[tu >> 1];
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u32 pair = CBA4_[packed];
+			const u16 src0 = (u16)pair;
+			const u16 src1 = (u16)(pair >> 16);
+		#else
+			const u16 src0 = CBA_[packed & 0x0f];
+			const u16 src1 = CBA_[packed >> 4];
+		#endif
+			if (src0) pDst[0] = src0;
+			if (src1) pDst[1] = src1;
+			pDst += 2;
+			tu += 2;
+			count -= 2;
+		}
+		if (count) {
+			const u8 packed = pTxt[tu >> 1];
+		#if QPSX_GPU_4BPP_PALETTE_LUT
+			const u16 src = (u16)CBA4_[packed];
+		#else
+			const u16 src = CBA_[packed & 0x0f];
+		#endif
+			if (src) *pDst = src;
+		}
+		return;
+	}
+#endif
 
 	do
 	{
@@ -505,12 +1439,80 @@ const PS gpuSpriteSpanDrivers[256] = {
 template<int CF>
 static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 {
+#if QPSX_GPU_RUNTIME_METRICS
+	qpsx_gpu_poly_span_hist[CF]++;
+	qpsx_gpu_poly_pixel_hist[CF] += count;
+	if (CF_TEXTMODE &&
+		gpu_unai.u_msk == ((255u << FIXED_BITS) | fixed_LOMASK) &&
+		gpu_unai.v_msk == ((255u << FIXED_BITS) | fixed_LOMASK)) {
+		++qpsx_gpu_poly_fullmask_spans;
+		qpsx_gpu_poly_fullmask_pixels += count;
+	}
+	if (CF_TEXTMODE && gpu_unai.u_inc == (1 << FIXED_BITS)) {
+		++qpsx_gpu_poly_unit_u_spans;
+		qpsx_gpu_poly_unit_u_pixels += count;
+	}
+	if (CF_TEXTMODE && gpu_unai.v_inc == 0) {
+		++qpsx_gpu_poly_flat_v_spans;
+		qpsx_gpu_poly_flat_v_pixels += count;
+	}
+#endif
+#if QPSX_GPU_4BPP_FLATV
+	if (CF == 32 && count >= QPSX_GPU_4BPP_FLATV_MIN_PIXELS &&
+	    qpsx_gpu_poly_span_4bpp_flatv(gpu_unai, pDst, count))
+		return;
+#endif
+#if QPSX_GPU_POLY_2043_FAST
+	if (CF == 2043) {
+		qpsx_gpu_poly_span_2043_fast<gpu_unai_t,
+				qpsx_gpu_poly2043_light_policy,
+				qpsx_gpu_poly2043_blend_policy,
+				qpsx_gpu_poly2043_quant_policy>(gpu_unai, pDst, count);
+		return;
+	}
+#endif
+#if QPSX_GPU_4BPP_FLATV_ROW
+	if (CF == 32 && count >= QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS &&
+	    qpsx_gpu_poly_span_4bpp_flatv_row(gpu_unai, pDst, count))
+		return;
+#endif
+#if QPSX_GPU_LINEAR_4BPP
+	if (CF == 32 && qpsx_gpu_poly_span_4bpp_linear(gpu_unai, pDst, count))
+		return;
+#endif
+#if QPSX_GPU_4BPP_FULLMASK
+	if (CF == 32 && count >= QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS &&
+		gpu_unai.u_msk == ((255u << FIXED_BITS) | fixed_LOMASK) &&
+		gpu_unai.v_msk == ((255u << FIXED_BITS) | fixed_LOMASK) &&
+		qpsx_gpu_poly_span_4bpp_fullmask(gpu_unai, pDst, count))
+		return;
+#endif
+#if QPSX_GPU_4BPP_GOURAUD_FLATV
+	if (CF == 161 && count >= QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS &&
+	    qpsx_gpu_poly_span_4bpp_gouraud_flatv(gpu_unai, pDst, count))
+		return;
+#endif
 	// Blend func can save an operation if it knows uSrc MSB is unset.
 	//  Untextured prims can always skip this (src color MSB is always 0).
 	//  For textured prims, lighting funcs always return it unset. (bonus!)
 	const bool skip_uSrc_mask = (!CF_TEXTMODE) || CF_LIGHT;
 
 	u32 bMsk; if (CF_BLITMASK) bMsk = gpu_unai.blit_mask;
+
+#if QPSX_GPU_PACKED_POLY_WRITES
+	/* The opaque, untextured, non-Gouraud polygon is a pure fill.  It is
+	 * common in the Ridge Racer scene (flat road/sky polygons), yet the
+	 * generic loop performs one 16-bit store per pixel.  Pairing identical
+	 * RGB555 pixels into aligned 32-bit stores halves store traffic and avoids
+	 * the load/branch machinery used by every other polygon variant.  Keep the
+	 * helper out of every template body: on a 16 KiB I-cache the cold alignment
+	 * and tail code is more expensive than the saving for short spans. */
+	if (!CF_TEXTMODE && !CF_GOURAUD && !CF_BLEND && !CF_MASKCHECK &&
+	    !CF_MASKSET && !CF_BLITMASK && count >= 8) {
+		qpsx_gpu_fill_flat_poly(pDst, count, gpu_unai.PixelData);
+		return;
+	}
+#endif
 
 	if (!CF_TEXTMODE)
 	{
@@ -737,12 +1739,55 @@ static void PolyNULL(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count)
 	#endif
 }
 
+/* The physical scene used for SF2000 tuning exercises only a few of the
+ * 2048 table entries.  Explicitly instantiate those entries before the
+ * complete dispatch table so function-section linking places their hot
+ * bodies together at the front of the renderer text.  The table remains
+ * complete and all other variants retain their exact semantics. */
+#if QPSX_GPU_HOT_DRIVER_ORDER == 2
+/* Keep measured driver families separate: 274/278 are pixel-span CF
+ * values, 46 is a sprite-span CF value, and 2043 is a polygon-span CF
+ * value.  Explicit instantiation only changes section order; dispatch
+ * indices and table types stay untouched. */
+template u8* gpuPixelSpanFn<274>(u8 *, uintptr_t, ptrdiff_t, size_t);
+template u8* gpuPixelSpanFn<278>(u8 *, uintptr_t, ptrdiff_t, size_t);
+template void gpuSpriteSpanFn<46>(u16 *, u32, u8 *, u32);
+template void gpuPolySpanFn<2043>(const gpu_unai_t &, u16 *, u32);
+#endif
+#if QPSX_GPU_HOT_DRIVER_ORDER == 1 || QPSX_GPU_HOT_DRIVER_ORDER == 2
+/* Legacy measured order retained as mode 1 and as the tail of mode 2. */
+template void gpuPolySpanFn<32>(const gpu_unai_t &, u16 *, u32);
+template void gpuPolySpanFn<161>(const gpu_unai_t &, u16 *, u32);
+template void gpuPolySpanFn<163>(const gpu_unai_t &, u16 *, u32);
+template void gpuPolySpanFn<2>(const gpu_unai_t &, u16 *, u32);
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////
 //  Polygon innerloops driver
 typedef void (*PP)(const gpu_unai_t &gpu_unai, u16 *pDst, u32 count);
 
 // Template instantiation helper macros
-#define TI(cf) gpuPolySpanFn<(cf)>
+/*
+ * Several command bits have no effect in particular span families. Map those
+ * table entries onto one canonical instantiation so taking every driver's
+ * address does not force the compiler to emit identical copies. This changes
+ * neither the table layout nor the inner-loop decisions that can be reached:
+ *
+ * - blend mode is unused when blending is disabled;
+ * - lighting is unused for untextured polygons;
+ * - Gouraud is unused for an unlit texture;
+ * - dithering needs Gouraud on untextured spans or lighting on textures;
+ * - display downsampling's blit mask is unused for untextured polygons.
+ */
+#define POLY_CANONICAL_FLAGS(cf) ( \
+	((cf) & (0x02 | 0x04 | 0x60 | 0x100)) | \
+	(((cf) & 0x02) ? ((cf) & 0x18) : 0) | \
+	(((cf) & 0x60) ? ((cf) & 0x01) : 0) | \
+	((!((cf) & 0x60) || ((cf) & 0x01)) ? ((cf) & 0x80) : 0) | \
+	(((!((cf) & 0x60) && ((cf) & 0x80)) || \
+	  (((cf) & 0x60) && ((cf) & 0x01))) ? ((cf) & 0x200) : 0) | \
+	(((cf) & 0x60) ? ((cf) & 0x400) : 0))
+#define TI(cf) gpuPolySpanFn<POLY_CANONICAL_FLAGS(cf)>
 #define TN     PolyNULL
 #define TIBLOCK(ub) \
 	TI((ub)|0x00), TI((ub)|0x01), TI((ub)|0x02), TI((ub)|0x03), TI((ub)|0x04), TI((ub)|0x05), TI((ub)|0x06), TI((ub)|0x07), \
@@ -786,3 +1831,65 @@ const PP gpuPolySpanDrivers[2048] = {
 #undef TI
 #undef TN
 #undef TIBLOCK
+#undef POLY_CANONICAL_FLAGS
+
+///////////////////////////////////////////////////////////////////////////////
+// Optional renderer-driver histogram.  The production build leaves these
+// wrappers as the original direct table accesses, so there is no counter or
+// branch in the hot path.  A diagnostic build can enable the histogram to
+// identify the small set of inner-loop variants that account for most of the
+// work on a particular game/scene.  Keeping the counters here makes them
+// local to the translation unit that owns the renderer and avoids a data
+// relocation on the NOMMU target.
+#if QPSX_GPU_RUNTIME_METRICS
+static u32 qpsx_gpu_poly_hist[2048];
+static u32 qpsx_gpu_sprite_hist[256];
+static u32 qpsx_gpu_pixel_hist[64];
+static u32 qpsx_gpu_tile_hist[32];
+u32 qpsx_gpu_poly_span_hist[2048];
+u32 qpsx_gpu_poly_pixel_hist[2048];
+u32 qpsx_gpu_sprite_pixel_hist[256];
+u32 qpsx_gpu_tile_pixel_hist[32];
+u32 qpsx_gpu_poly_fullmask_spans;
+u32 qpsx_gpu_poly_fullmask_pixels;
+u32 qpsx_gpu_poly_unit_u_spans;
+u32 qpsx_gpu_poly_unit_u_pixels;
+u32 qpsx_gpu_poly_flat_v_spans;
+u32 qpsx_gpu_poly_flat_v_pixels;
+u32 qpsx_gpu_line_g_total;
+u32 qpsx_gpu_line_g_flatfast;
+
+static inline PP qpsx_gpu_poly_driver(u32 index)
+{
+	++qpsx_gpu_poly_hist[index];
+	return gpuPolySpanDrivers[index];
+}
+
+static inline PS qpsx_gpu_sprite_driver(u32 index)
+{
+	++qpsx_gpu_sprite_hist[index];
+	return gpuSpriteSpanDrivers[index];
+}
+
+static inline PSD qpsx_gpu_pixel_driver(u32 index)
+{
+	++qpsx_gpu_pixel_hist[index];
+	return gpuPixelSpanDrivers[index];
+}
+
+static inline PT qpsx_gpu_tile_driver(u32 index)
+{
+	++qpsx_gpu_tile_hist[index];
+	return gpuTileSpanDrivers[index];
+}
+
+#define QPSX_GPU_POLY_DRIVER(index) qpsx_gpu_poly_driver((u32)(index))
+#define QPSX_GPU_SPRITE_DRIVER(index) qpsx_gpu_sprite_driver((u32)(index))
+#define QPSX_GPU_PIXEL_DRIVER(index) qpsx_gpu_pixel_driver((u32)(index))
+#define QPSX_GPU_TILE_DRIVER(index) qpsx_gpu_tile_driver((u32)(index))
+#else
+#define QPSX_GPU_POLY_DRIVER(index) gpuPolySpanDrivers[(index)]
+#define QPSX_GPU_SPRITE_DRIVER(index) gpuSpriteSpanDrivers[(index)]
+#define QPSX_GPU_PIXEL_DRIVER(index) gpuPixelSpanDrivers[(index)]
+#define QPSX_GPU_TILE_DRIVER(index) gpuTileSpanDrivers[(index)]
+#endif

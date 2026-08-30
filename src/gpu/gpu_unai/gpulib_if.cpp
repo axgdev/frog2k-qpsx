@@ -27,6 +27,8 @@
 #include "gpu/gpulib/gpu.h"
 #include "port.h"
 #include "gpu_unai.h"
+#include "qpsx_build_config.h"
+#include "qpsx_phase_metrics.h"
 
 /* SF2000 xlog debugging */
 #ifdef SF2000
@@ -63,9 +65,100 @@ extern "C" {
 
 /////////////////////////////////////////////////////////////////////////////
 
+#if QPSX_GPU_RUNTIME_METRICS
+/* Keep this report outside the primitive path.  The counters are bumped once
+ * per driver selection (never once per pixel), so a diagnostic build remains
+ * representative on the small HC15xx CPU. */
+static void qpsx_gpu_log_hist(const char *name, const u32 *hist, unsigned count)
+{
+  u32 total = 0;
+  unsigned nonzero = 0;
+  u32 top_count[4] = { 0, 0, 0, 0 };
+  unsigned top_index[4] = { 0, 0, 0, 0 };
+
+  for (unsigned i = 0; i < count; ++i) {
+    const u32 value = hist[i];
+    total += value;
+    if (value != 0) {
+      ++nonzero;
+      for (unsigned slot = 0; slot < 4; ++slot) {
+        if (value > top_count[slot]) {
+          for (unsigned move = 3; move > slot; --move) {
+            top_count[move] = top_count[move - 1];
+            top_index[move] = top_index[move - 1];
+          }
+          top_count[slot] = value;
+          top_index[slot] = i;
+          break;
+        }
+      }
+    }
+  }
+
+  GPUIF_LOG("GPU driver metrics %s total=%u nonzero=%u "
+            "top=%u:%u,%u:%u,%u:%u,%u:%u", name, total, nonzero,
+            top_index[0], top_count[0], top_index[1], top_count[1],
+            top_index[2], top_count[2], top_index[3], top_count[3]);
+}
+
+static void qpsx_gpu_log_metrics(void)
+{
+  qpsx_gpu_log_hist("poly", qpsx_gpu_poly_hist,
+                    sizeof(qpsx_gpu_poly_hist) / sizeof(qpsx_gpu_poly_hist[0]));
+  qpsx_gpu_log_hist("sprite", qpsx_gpu_sprite_hist,
+                    sizeof(qpsx_gpu_sprite_hist) / sizeof(qpsx_gpu_sprite_hist[0]));
+  qpsx_gpu_log_hist("pixel", qpsx_gpu_pixel_hist,
+                    sizeof(qpsx_gpu_pixel_hist) / sizeof(qpsx_gpu_pixel_hist[0]));
+  qpsx_gpu_log_hist("tile", qpsx_gpu_tile_hist,
+                    sizeof(qpsx_gpu_tile_hist) / sizeof(qpsx_gpu_tile_hist[0]));
+  qpsx_gpu_log_hist("poly_spans", qpsx_gpu_poly_span_hist,
+                    sizeof(qpsx_gpu_poly_span_hist) /
+                    sizeof(qpsx_gpu_poly_span_hist[0]));
+  qpsx_gpu_log_hist("poly_pixels", qpsx_gpu_poly_pixel_hist,
+                    sizeof(qpsx_gpu_poly_pixel_hist) /
+                    sizeof(qpsx_gpu_poly_pixel_hist[0]));
+  qpsx_gpu_log_hist("sprite_pixels", qpsx_gpu_sprite_pixel_hist,
+                    sizeof(qpsx_gpu_sprite_pixel_hist) /
+                    sizeof(qpsx_gpu_sprite_pixel_hist[0]));
+  qpsx_gpu_log_hist("tile_pixels", qpsx_gpu_tile_pixel_hist,
+                    sizeof(qpsx_gpu_tile_pixel_hist) /
+                    sizeof(qpsx_gpu_tile_pixel_hist[0]));
+  GPUIF_LOG("GPU texture metrics fullmask=%u/%u unit_u=%u/%u flat_v=%u/%u",
+            qpsx_gpu_poly_fullmask_spans, qpsx_gpu_poly_fullmask_pixels,
+            qpsx_gpu_poly_unit_u_spans, qpsx_gpu_poly_unit_u_pixels,
+            qpsx_gpu_poly_flat_v_spans, qpsx_gpu_poly_flat_v_pixels);
+  GPUIF_LOG("GPU line metrics gouraud=%u flatfast=%u",
+            qpsx_gpu_line_g_total, qpsx_gpu_line_g_flatfast);
+}
+
+extern "C" void renderer_log_metrics(void)
+{
+  qpsx_gpu_log_metrics();
+}
+#endif
+
 int renderer_init(void)
 {
   GPUIF_LOG("renderer_init() start");
+
+#if QPSX_GPU_RUNTIME_METRICS
+  memset(qpsx_gpu_poly_hist, 0, sizeof(qpsx_gpu_poly_hist));
+  memset(qpsx_gpu_sprite_hist, 0, sizeof(qpsx_gpu_sprite_hist));
+  memset(qpsx_gpu_pixel_hist, 0, sizeof(qpsx_gpu_pixel_hist));
+  memset(qpsx_gpu_tile_hist, 0, sizeof(qpsx_gpu_tile_hist));
+  memset(qpsx_gpu_poly_span_hist, 0, sizeof(qpsx_gpu_poly_span_hist));
+  memset(qpsx_gpu_poly_pixel_hist, 0, sizeof(qpsx_gpu_poly_pixel_hist));
+  memset(qpsx_gpu_sprite_pixel_hist, 0, sizeof(qpsx_gpu_sprite_pixel_hist));
+  memset(qpsx_gpu_tile_pixel_hist, 0, sizeof(qpsx_gpu_tile_pixel_hist));
+  qpsx_gpu_poly_fullmask_spans = 0;
+  qpsx_gpu_poly_fullmask_pixels = 0;
+  qpsx_gpu_poly_unit_u_spans = 0;
+  qpsx_gpu_poly_unit_u_pixels = 0;
+  qpsx_gpu_poly_flat_v_spans = 0;
+  qpsx_gpu_poly_flat_v_pixels = 0;
+  qpsx_gpu_line_g_total = 0;
+  qpsx_gpu_line_g_flatfast = 0;
+#endif
 
   GPUIF_LOG("memset gpu_unai (%d bytes)...", (int)sizeof(gpu_unai));
   memset((void*)&gpu_unai, 0, sizeof(gpu_unai));
@@ -104,13 +197,13 @@ int renderer_init(void)
   // s_invTable
   for(int i=1;i<=(1<<TABLE_BITS);++i)
   {
-    double v = 1.0 / double(i);
 #ifdef GPU_TABLE_10_BITS
-    v *= double(0xffffffff>>1);
+    const uint32_t numerator = 0x7fffffffu;
 #else
-    v *= double(0x80000000);
+    const uint32_t numerator = 0x80000000u;
 #endif
-    s_invTable[i-1]=s32(v);
+    /* Keep startup and runtime entirely integer on the no-FPU target. */
+    s_invTable[i-1] = (s32)(numerator / (uint32_t)i);
   }
   GPUIF_LOG("s_invTable built");
 #endif
@@ -129,6 +222,9 @@ int renderer_init(void)
 
 void renderer_finish(void)
 {
+#if QPSX_GPU_RUNTIME_METRICS
+  renderer_log_metrics();
+#endif
 }
 
 void renderer_notify_res_change(void)
@@ -242,11 +338,17 @@ static void gpuGP0Cmd_0xEx(gpu_unai_t &gpu_unai, u32 cmd_word)
 
 extern const unsigned char cmd_lengths[256];
 
-int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
+#ifndef QPSX_GPU_DIRECT_PACKET
+#define QPSX_GPU_DIRECT_PACKET 0
+#endif
+
+QPSX_HOT_GPU int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
 {
   uint32_t cmd = 0, len, i;
   uint32_t *list_start = list;
   uint32_t *list_end = list + list_len;
+
+  QPSX_PHASE_GPU((unsigned)list_len);
 
   //TODO: set ilace_mask when resolution changes instead of every time,
   // eliminate #ifdef below.
@@ -266,11 +368,27 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
     }
 
     #define PRIM cmd
-    gpu_unai.PacketBuffer.U4[0] = list[0];
-    for (i = 1; i <= len; i++)
-      gpu_unai.PacketBuffer.U4[i] = list[i];
-
-    PtrUnion packet = { .ptr = (void*)&gpu_unai.PacketBuffer };
+    PtrUnion packet;
+#if QPSX_GPU_DIRECT_PACKET
+    /* DMA command lists already have the exact GP0 packet layout.  Most
+     * primitives only read it, so drawing from the list avoids copying every
+     * word through the tiny D-cache.  Line strips and fixed-size rectangles
+     * rewrite packet fields while expanding the command and retain the owned
+     * scratch buffer. */
+    const bool packet_is_mutable =
+      (cmd >= 0x48 && cmd <= 0x4f) ||
+      (cmd >= 0x58 && cmd <= 0x5f) ||
+      (cmd >= 0x68 && cmd <= 0x7f);
+    if (!packet_is_mutable) {
+      packet.ptr = list;
+    } else
+#endif
+    {
+      gpu_unai.PacketBuffer.U4[0] = list[0];
+      for (i = 1; i <= len; i++)
+        gpu_unai.PacketBuffer.U4[i] = list[i];
+      packet.ptr = (void *)&gpu_unai.PacketBuffer;
+    }
 
     switch (cmd)
     {
@@ -282,11 +400,11 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x21:
       case 0x22:
       case 0x23: {          // Monochrome 3-pt poly
-        PP driver = gpuPolySpanDrivers[
+        PP driver = QPSX_GPU_POLY_DRIVER(
           (gpu_unai.blit_mask?1024:0) |
           Blending_Mode |
           gpu_unai.Masking | Blending | gpu_unai.PixelMSB
-        ];
+        );
         gpuDrawPolyF(packet, driver, false);
       } break;
 
@@ -294,8 +412,8 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x25:
       case 0x26:
       case 0x27: {          // Textured 3-pt poly
-        gpuSetCLUT   (gpu_unai.PacketBuffer.U4[2] >> 16);
-        gpuSetTexture(gpu_unai.PacketBuffer.U4[4] >> 16);
+        gpuSetCLUT   (packet.U4[2] >> 16);
+        gpuSetTexture(packet.U4[4] >> 16);
 
         u32 driver_idx =
           (gpu_unai.blit_mask?1024:0) |
@@ -306,11 +424,11 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         if (!FastLightingEnabled()) {
           driver_idx |= Lighting;
         } else {
-          if (!((gpu_unai.PacketBuffer.U1[0]>0x5F) && (gpu_unai.PacketBuffer.U1[1]>0x5F) && (gpu_unai.PacketBuffer.U1[2]>0x5F)))
+          if (!((packet.U1[0]>0x5F) && (packet.U1[1]>0x5F) && (packet.U1[2]>0x5F)))
             driver_idx |= Lighting;
         }
 
-        PP driver = gpuPolySpanDrivers[driver_idx];
+        PP driver = QPSX_GPU_POLY_DRIVER(driver_idx);
         gpuDrawPolyFT(packet, driver, false);
       } break;
 
@@ -318,11 +436,11 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x29:
       case 0x2A:
       case 0x2B: {          // Monochrome 4-pt poly
-        PP driver = gpuPolySpanDrivers[
+        PP driver = QPSX_GPU_POLY_DRIVER(
           (gpu_unai.blit_mask?1024:0) |
           Blending_Mode |
           gpu_unai.Masking | Blending | gpu_unai.PixelMSB
-        ];
+        );
         gpuDrawPolyF(packet, driver, true); // is_quad = true
       } break;
 
@@ -330,8 +448,8 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x2D:
       case 0x2E:
       case 0x2F: {          // Textured 4-pt poly
-        gpuSetCLUT   (gpu_unai.PacketBuffer.U4[2] >> 16);
-        gpuSetTexture(gpu_unai.PacketBuffer.U4[4] >> 16);
+        gpuSetCLUT   (packet.U4[2] >> 16);
+        gpuSetTexture(packet.U4[4] >> 16);
 
         u32 driver_idx =
           (gpu_unai.blit_mask?1024:0) |
@@ -342,11 +460,11 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         if (!FastLightingEnabled()) {
           driver_idx |= Lighting;
         } else {
-          if (!((gpu_unai.PacketBuffer.U1[0]>0x5F) && (gpu_unai.PacketBuffer.U1[1]>0x5F) && (gpu_unai.PacketBuffer.U1[2]>0x5F)))
+          if (!((packet.U1[0]>0x5F) && (packet.U1[1]>0x5F) && (packet.U1[2]>0x5F)))
             driver_idx |= Lighting;
         }
 
-        PP driver = gpuPolySpanDrivers[driver_idx];
+        PP driver = QPSX_GPU_POLY_DRIVER(driver_idx);
         gpuDrawPolyFT(packet, driver, true); // is_quad = true
       } break;
 
@@ -358,12 +476,12 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         // this is an untextured poly, so CF_LIGHT (texture blend)
         // shouldn't apply. Until the original array of template
         // instantiation ptrs is fixed, we're stuck with this. (TODO)
-        PP driver = gpuPolySpanDrivers[
+        PP driver = QPSX_GPU_POLY_DRIVER(
           (gpu_unai.blit_mask?1024:0) |
           Dithering |
           Blending_Mode |
           gpu_unai.Masking | Blending | 129 | gpu_unai.PixelMSB
-        ];
+        );
         gpuDrawPolyG(packet, driver, false);
       } break;
 
@@ -371,14 +489,14 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x35:
       case 0x36:
       case 0x37: {          // Gouraud-shaded, textured 3-pt poly
-        gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
-        gpuSetTexture (gpu_unai.PacketBuffer.U4[5] >> 16);
-        PP driver = gpuPolySpanDrivers[
+        gpuSetCLUT    (packet.U4[2] >> 16);
+        gpuSetTexture (packet.U4[5] >> 16);
+        PP driver = QPSX_GPU_POLY_DRIVER(
           (gpu_unai.blit_mask?1024:0) |
           Dithering |
           Blending_Mode | gpu_unai.TEXT_MODE |
           gpu_unai.Masking | Blending | ((Lighting)?129:0) | gpu_unai.PixelMSB
-        ];
+        );
         gpuDrawPolyGT(packet, driver, false);
       } break;
 
@@ -387,12 +505,12 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x3A:
       case 0x3B: {          // Gouraud-shaded 4-pt poly
         // See notes regarding '129' for 0x30..0x33 further above -senquack
-        PP driver = gpuPolySpanDrivers[
+        PP driver = QPSX_GPU_POLY_DRIVER(
           (gpu_unai.blit_mask?1024:0) |
           Dithering |
           Blending_Mode |
           gpu_unai.Masking | Blending | 129 | gpu_unai.PixelMSB
-        ];
+        );
         gpuDrawPolyG(packet, driver, true); // is_quad = true
       } break;
 
@@ -400,14 +518,14 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x3D:
       case 0x3E:
       case 0x3F: {          // Gouraud-shaded, textured 4-pt poly
-        gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
-        gpuSetTexture (gpu_unai.PacketBuffer.U4[5] >> 16);
-        PP driver = gpuPolySpanDrivers[
+        gpuSetCLUT    (packet.U4[2] >> 16);
+        gpuSetTexture (packet.U4[5] >> 16);
+        PP driver = QPSX_GPU_POLY_DRIVER(
           (gpu_unai.blit_mask?1024:0) |
           Dithering |
           Blending_Mode | gpu_unai.TEXT_MODE |
           gpu_unai.Masking | Blending | ((Lighting)?129:0) | gpu_unai.PixelMSB
-        ];
+        );
         gpuDrawPolyGT(packet, driver, true); // is_quad = true
       } break;
 
@@ -417,7 +535,7 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x43: {          // Monochrome line
         // Shift index right by one, as untextured prims don't use lighting
         u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
-        PSD driver = gpuPixelSpanDrivers[driver_idx];
+        PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
         gpuDrawLineF(packet, driver);
       } break;
 
@@ -427,13 +545,13 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
 
         // Shift index right by one, as untextured prims don't use lighting
         u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
-        PSD driver = gpuPixelSpanDrivers[driver_idx];
+        PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
         gpuDrawLineF(packet, driver);
 
         while(1)
         {
-          gpu_unai.PacketBuffer.U4[1] = gpu_unai.PacketBuffer.U4[2];
-          gpu_unai.PacketBuffer.U4[2] = *list_position++;
+          packet.U4[1] = packet.U4[2];
+          packet.U4[2] = *list_position++;
           gpuDrawLineF(packet, driver);
 
           num_vertexes++;
@@ -456,8 +574,13 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
         // Index MSB selects Gouraud-shaded PixelSpanDriver:
         driver_idx |= (1 << 5);
-        PSD driver = gpuPixelSpanDrivers[driver_idx];
+        PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
+        #if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+        gpuDrawLineG(packet, driver,
+                     QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+        #else
         gpuDrawLineG(packet, driver);
+        #endif
       } break;
 
       case 0x58 ... 0x5F: { // Gouraud-shaded line strip
@@ -468,16 +591,26 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         u32 driver_idx = (Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1;
         // Index MSB selects Gouraud-shaded PixelSpanDriver:
         driver_idx |= (1 << 5);
-        PSD driver = gpuPixelSpanDrivers[driver_idx];
+        PSD driver = QPSX_GPU_PIXEL_DRIVER(driver_idx);
+        #if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+        gpuDrawLineG(packet, driver,
+                     QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+        #else
         gpuDrawLineG(packet, driver);
+        #endif
 
         while(1)
         {
-          gpu_unai.PacketBuffer.U4[0] = gpu_unai.PacketBuffer.U4[2];
-          gpu_unai.PacketBuffer.U4[1] = gpu_unai.PacketBuffer.U4[3];
-          gpu_unai.PacketBuffer.U4[2] = *list_position++;
-          gpu_unai.PacketBuffer.U4[3] = *list_position++;
+          packet.U4[0] = packet.U4[2];
+          packet.U4[1] = packet.U4[3];
+          packet.U4[2] = *list_position++;
+          packet.U4[3] = *list_position++;
+          #if QPSX_GPU_GOURAUD_LINE_FLATFAST_ACTIVE
+          gpuDrawLineG(packet, driver,
+                       QPSX_GPU_PIXEL_DRIVER(driver_idx & ~(1u << 5)));
+          #else
           gpuDrawLineG(packet, driver);
+          #endif
 
           num_vertexes++;
           if(list_position >= list_end) {
@@ -495,7 +628,7 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x61:
       case 0x62:
       case 0x63: {          // Monochrome rectangle (variable size)
-        PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+        PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
         gpuDrawT(packet, driver);
       } break;
 
@@ -503,7 +636,7 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x65:
       case 0x66:
       case 0x67: {          // Textured rectangle (variable size)
-        gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
+        gpuSetCLUT    (packet.U4[2] >> 16);
         u32 driver_idx = Blending_Mode | gpu_unai.TEXT_MODE | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>1);
 
         //senquack - Only color 808080h-878787h allows skipping lighting calculation:
@@ -520,9 +653,9 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         //  alone, I don't want to slow rendering down too much. (TODO)
         //if ((gpu_unai.PacketBuffer.U1[0]>0x5F) && (gpu_unai.PacketBuffer.U1[1]>0x5F) && (gpu_unai.PacketBuffer.U1[2]>0x5F))
         // Strip lower 3 bits of each color and determine if lighting should be used:
-        if ((gpu_unai.PacketBuffer.U4[0] & 0xF8F8F8) != 0x808080)
+        if ((packet.U4[0] & 0xF8F8F8) != 0x808080)
           driver_idx |= Lighting;
-        PS driver = gpuSpriteSpanDrivers[driver_idx];
+        PS driver = QPSX_GPU_SPRITE_DRIVER(driver_idx);
         gpuDrawS(packet, driver);
       } break;
 
@@ -530,8 +663,8 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x69:
       case 0x6A:
       case 0x6B: {          // Monochrome rectangle (1x1 dot)
-        gpu_unai.PacketBuffer.U4[2] = 0x00010001;
-        PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+        packet.U4[2] = 0x00010001;
+        PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
         gpuDrawT(packet, driver);
       } break;
 
@@ -539,8 +672,8 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x71:
       case 0x72:
       case 0x73: {          // Monochrome rectangle (8x8)
-        gpu_unai.PacketBuffer.U4[2] = 0x00080008;
-        PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+        packet.U4[2] = 0x00080008;
+        PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
         gpuDrawT(packet, driver);
       } break;
 
@@ -548,16 +681,16 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x75:
       case 0x76:
       case 0x77: {          // Textured rectangle (8x8)
-        gpu_unai.PacketBuffer.U4[3] = 0x00080008;
-        gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
+        packet.U4[3] = 0x00080008;
+        gpuSetCLUT    (packet.U4[2] >> 16);
         u32 driver_idx = Blending_Mode | gpu_unai.TEXT_MODE | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>1);
 
         //senquack - Only color 808080h-878787h allows skipping lighting calculation:
         //if ((gpu_unai.PacketBuffer.U1[0]>0x5F) && (gpu_unai.PacketBuffer.U1[1]>0x5F) && (gpu_unai.PacketBuffer.U1[2]>0x5F))
         // Strip lower 3 bits of each color and determine if lighting should be used:
-        if ((gpu_unai.PacketBuffer.U4[0] & 0xF8F8F8) != 0x808080)
+        if ((packet.U4[0] & 0xF8F8F8) != 0x808080)
           driver_idx |= Lighting;
-        PS driver = gpuSpriteSpanDrivers[driver_idx];
+        PS driver = QPSX_GPU_SPRITE_DRIVER(driver_idx);
         gpuDrawS(packet, driver);
       } break;
 
@@ -565,8 +698,8 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
       case 0x79:
       case 0x7A:
       case 0x7B: {          // Monochrome rectangle (16x16)
-        gpu_unai.PacketBuffer.U4[2] = 0x00100010;
-        PT driver = gpuTileSpanDrivers[(Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1];
+        packet.U4[2] = 0x00100010;
+        PT driver = QPSX_GPU_TILE_DRIVER((Blending_Mode | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>3)) >> 1);
         gpuDrawT(packet, driver);
       } break;
 
@@ -575,7 +708,7 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
 #ifdef __arm__
         if ((gpu_unai.GPU_GP1 & 0x180) == 0 && (gpu_unai.Masking | gpu_unai.PixelMSB) == 0)
         {
-          gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
+          gpuSetCLUT    (packet.U4[2] >> 16);
           gpuDrawS16(packet);
           break;
         }
@@ -583,15 +716,15 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
 #endif
       case 0x7E:
       case 0x7F: {          // Textured rectangle (16x16)
-        gpu_unai.PacketBuffer.U4[3] = 0x00100010;
-        gpuSetCLUT    (gpu_unai.PacketBuffer.U4[2] >> 16);
+        packet.U4[3] = 0x00100010;
+        gpuSetCLUT    (packet.U4[2] >> 16);
         u32 driver_idx = Blending_Mode | gpu_unai.TEXT_MODE | gpu_unai.Masking | Blending | (gpu_unai.PixelMSB>>1);
         //senquack - Only color 808080h-878787h allows skipping lighting calculation:
         //if ((gpu_unai.PacketBuffer.U1[0]>0x5F) && (gpu_unai.PacketBuffer.U1[1]>0x5F) && (gpu_unai.PacketBuffer.U1[2]>0x5F))
         // Strip lower 3 bits of each color and determine if lighting should be used:
-        if ((gpu_unai.PacketBuffer.U4[0] & 0xF8F8F8) != 0x808080)
+        if ((packet.U4[0] & 0xF8F8F8) != 0x808080)
           driver_idx |= Lighting;
-        PS driver = gpuSpriteSpanDrivers[driver_idx];
+        PS driver = QPSX_GPU_SPRITE_DRIVER(driver_idx);
         gpuDrawS(packet, driver);
       } break;
 
@@ -618,7 +751,7 @@ int do_cmd_list(uint32_t *list, int list_len, int *last_cmd)
         goto breakloop;
 #endif
       case 0xE1 ... 0xE6: { // Draw settings
-        gpuGP0Cmd_0xEx(gpu_unai, gpu_unai.PacketBuffer.U4[0]);
+        gpuGP0Cmd_0xEx(gpu_unai, packet.U4[0]);
       } break;
     }
   }

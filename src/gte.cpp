@@ -21,9 +21,14 @@
 
 #include "gte.h"
 #include "psxmem.h"
+#include "profiler.h"
 
-// MIPS platforms have hardware divider, faster than 64KB LUT + UNR algo
-#if defined(__mips__)
+// MIPS platforms have hardware divider, faster than 64KB LUT + UNR algo.
+// Keep a build switch for device A/B tests; native divide remains default.
+#ifndef QPSX_GTE_NATIVE_DIVIDE
+#define QPSX_GTE_NATIVE_DIVIDE 1
+#endif
+#if defined(__mips__) && QPSX_GTE_NATIVE_DIVIDE
 #define GTE_USE_NATIVE_DIVIDE
 #endif
 
@@ -34,6 +39,129 @@
 //  still set for other calculations.
 #if !(defined(__arm__) || defined(__mips__))
 #define PARANOID_OVERFLOW_CHECKING
+#endif
+
+/* RTPS/RTPT dominate the measured GTE time on the HC15xx.  Keep the rest of
+ * the core at the cache-friendly -O2 setting, but allow a benchmarked build
+ * to give only these two straight-line kernels GCC's stronger register
+ * allocation.  The attribute is ignored unless the frontend explicitly
+ * enables QPSX_GTE_HOT_O3. */
+#ifndef QPSX_GTE_HOT_O3
+#define QPSX_GTE_HOT_O3 0
+#endif
+#if QPSX_GTE_HOT_O3 && defined(__GNUC__)
+#define QPSX_GTE_HOT __attribute__((optimize("O3")))
+#else
+#define QPSX_GTE_HOT
+#endif
+
+#ifndef QPSX_GTE_RTPT_OS
+#define QPSX_GTE_RTPT_OS 0
+#endif
+#if QPSX_GTE_RTPT_OS && defined(__GNUC__)
+#define QPSX_GTE_RTPT_OPT __attribute__((optimize("Os"), flatten))
+#else
+#define QPSX_GTE_RTPT_OPT QPSX_GTE_HOT
+#endif
+
+#ifndef QPSX_GTE_RTPT_ASM_FAST
+#define QPSX_GTE_RTPT_ASM_FAST 0
+#endif
+#if QPSX_GTE_RTPT_ASM_FAST && defined(__mips__)
+/* Returns 1 after the leaf committed saturated PS1-visible results.  A zero
+ * return remains reserved for future guards that need the exact C fallback. */
+extern "C" int gte_RTPT_asm(void);
+#endif
+
+/* Keep the normal GTE path byte-for-byte free of diagnostic state.  The
+ * optional build is intentionally a direct increment in each operation
+ * wrapper: unlike cycle/profiler instrumentation it adds no calls, time
+ * reads, or formatting to the hot path. */
+#ifndef QPSX_GTE_OPCODE_COUNTER
+#define QPSX_GTE_OPCODE_COUNTER 0
+#endif
+
+#if QPSX_GTE_OPCODE_COUNTER
+extern "C" void xlog(const char *fmt, ...);
+
+enum qpsx_gte_opcode_counter_id {
+	QPSX_GTE_COUNT_MFC2,
+	QPSX_GTE_COUNT_CFC2,
+	QPSX_GTE_COUNT_MTC2,
+	QPSX_GTE_COUNT_CTC2,
+	QPSX_GTE_COUNT_LWC2,
+	QPSX_GTE_COUNT_SWC2,
+	QPSX_GTE_COUNT_RTPS,
+	QPSX_GTE_COUNT_OP,
+	QPSX_GTE_COUNT_NCLIP,
+	QPSX_GTE_COUNT_DPCS,
+	QPSX_GTE_COUNT_INTPL,
+	QPSX_GTE_COUNT_MVMVA,
+	QPSX_GTE_COUNT_NCDS,
+	QPSX_GTE_COUNT_NCDT,
+	QPSX_GTE_COUNT_CDP,
+	QPSX_GTE_COUNT_NCCS,
+	QPSX_GTE_COUNT_CC,
+	QPSX_GTE_COUNT_NCS,
+	QPSX_GTE_COUNT_NCT,
+	QPSX_GTE_COUNT_SQR,
+	QPSX_GTE_COUNT_DCPL,
+	QPSX_GTE_COUNT_DPCT,
+	QPSX_GTE_COUNT_AVSZ3,
+	QPSX_GTE_COUNT_AVSZ4,
+	QPSX_GTE_COUNT_RTPT,
+	QPSX_GTE_COUNT_GPF,
+	QPSX_GTE_COUNT_GPL,
+	QPSX_GTE_COUNT_NCCT,
+	QPSX_GTE_COUNT_MAX
+};
+
+static u32 qpsx_gte_opcode_counts[QPSX_GTE_COUNT_MAX];
+
+#define QPSX_GTE_COUNT(id) (++qpsx_gte_opcode_counts[(id)])
+
+void qpsx_gte_opcode_counter_reset(void)
+{
+	memset(qpsx_gte_opcode_counts, 0, sizeof(qpsx_gte_opcode_counts));
+}
+
+void qpsx_gte_opcode_counter_report(void)
+{
+	xlog("QPSX: gte_count xfer mfc2=%u cfc2=%u mtc2=%u ctc2=%u lwc2=%u swc2=%u",
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_MFC2],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_CFC2],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_MTC2],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_CTC2],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_LWC2],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_SWC2]);
+	xlog("QPSX: gte_count geom rtps=%u rtpt=%u nclip=%u avsz3=%u avsz4=%u",
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_RTPS],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_RTPT],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_NCLIP],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_AVSZ3],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_AVSZ4]);
+	xlog("QPSX: gte_count shade op=%u mvmva=%u ncds=%u ncdt=%u cdp=%u nccs=%u cc=%u ncs=%u nct=%u ncct=%u",
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_OP],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_MVMVA],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_NCDS],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_NCDT],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_CDP],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_NCCS],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_CC],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_NCS],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_NCT],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_NCCT]);
+	xlog("QPSX: gte_count color dpcs=%u intpl=%u sqr=%u dcpl=%u dpct=%u gpf=%u gpl=%u",
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_DPCS],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_INTPL],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_SQR],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_DCPL],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_DPCT],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_GPF],
+	     qpsx_gte_opcode_counts[QPSX_GTE_COUNT_GPL]);
+}
+#else
+#define QPSX_GTE_COUNT(id) do { } while (0)
 #endif
 
 #define VX(n) (n < 3 ? psxRegs.CP2D.p[n << 1].sw.l : psxRegs.CP2D.p[9].sw.l)
@@ -369,39 +497,47 @@ void gtecalcCTC2(u32 value, int reg) {
 }
 
 void gteMFC2(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_MFC2);
 	if (!_Rt_) return;
 	psxRegs.GPR.r[_Rt_] = gtecalcMFC2(_Rd_);
 }
 
 void gteCFC2(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_CFC2);
 	if (!_Rt_) return;
 	psxRegs.GPR.r[_Rt_] = psxRegs.CP2C.r[_Rd_];
 }
 
 void gteMTC2(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_MTC2);
 	gtecalcMTC2(psxRegs.GPR.r[_Rt_], _Rd_);
 }
 
 void gteCTC2(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_CTC2);
 	gtecalcCTC2(psxRegs.GPR.r[_Rt_], _Rd_);
 }
 
 #define _oB_ (psxRegs.GPR.r[_Rs_] + _Imm_)
 
 void gteLWC2(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_LWC2);
 	gtecalcMTC2(psxMemRead32(_oB_), _Rt_);
 }
 
 void gteSWC2(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_SWC2);
 	psxMemWrite32(_oB_, gtecalcMFC2(_Rt_));
 }
 
-void gteRTPS(void) {
+QPSX_GTE_HOT void gteRTPS(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_RTPS);
 	int quotient;
 
 #ifdef GTE_LOG
 	GTE_LOG("GTE RTPS\n");
 #endif
+	PROFILE_START(PROF_GTE_RTPS);
 	gteFLAG = 0;
 
 	gteMAC1 = A1((((s64)gteTRX << 12) + (gteR11 * gteVX0) + (gteR12 * gteVY0) + (gteR13 * gteVZ0)) >> 12);
@@ -427,9 +563,11 @@ void gteRTPS(void) {
 	s64 tmp = (s64)gteDQB + ((s64)gteDQA * quotient);
 	gteMAC0 = F(tmp);
 	gteIR0 = limH(tmp >> 12);
+	PROFILE_END(PROF_GTE_RTPS);
 }
 
-void gteRTPT(void) {
+QPSX_GTE_RTPT_OPT void gteRTPT(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_RTPT);
 	int quotient;
 	int v;
 	s32 vx, vy, vz;
@@ -437,6 +575,13 @@ void gteRTPT(void) {
 #ifdef GTE_LOG
 	GTE_LOG("GTE RTPT\n");
 #endif
+	PROFILE_START(PROF_GTE_RTPT);
+	#if QPSX_GTE_RTPT_ASM_FAST && defined(__mips__)
+	if (gte_RTPT_asm()) {
+		PROFILE_END(PROF_GTE_RTPT);
+		return;
+	}
+	#endif
 	gteFLAG = 0;
 
 	gteSZ0 = gteSZ3;
@@ -460,10 +605,12 @@ void gteRTPT(void) {
 	s64 tmp = (s64)gteDQB + ((s64)gteDQA * quotient);
 	gteMAC0 = F(tmp);
 	gteIR0 = limH(tmp >> 12);
+	PROFILE_END(PROF_GTE_RTPT);
 }
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
 void gteMVMVA(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_MVMVA);
 	int shift = 12 * GTE_SF(gteop);
 	int mx = GTE_MX(gteop);
 	int v = GTE_V(gteop);
@@ -476,6 +623,7 @@ void gteMVMVA(u32 gteop) {
 #ifdef GTE_LOG
 	GTE_LOG("GTE MVMVA\n");
 #endif
+	PROFILE_START(PROF_GTE_MVMVA);
 	gteFLAG = 0;
 
 	gteMAC1 = A1((((s64)CV1(cv) << 12) + (MX11(mx) * vx) + (MX12(mx) * vy) + (MX13(mx) * vz)) >> shift);
@@ -485,20 +633,25 @@ void gteMVMVA(u32 gteop) {
 	gteIR1 = limB1(gteMAC1, lm);
 	gteIR2 = limB2(gteMAC2, lm);
 	gteIR3 = limB3(gteMAC3, lm);
+	PROFILE_END(PROF_GTE_MVMVA);
 }
 
 void gteNCLIP(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_NCLIP);
 #ifdef GTE_LOG
 	GTE_LOG("GTE NCLIP\n");
 #endif
+	PROFILE_START(PROF_GTE_NCLIP);
 	gteFLAG = 0;
 
 	gteMAC0 = F((s64)gteSX0 * (gteSY1 - gteSY2) +
 				gteSX1 * (gteSY2 - gteSY0) +
 				gteSX2 * (gteSY0 - gteSY1));
+	PROFILE_END(PROF_GTE_NCLIP);
 }
 
 void gteAVSZ3(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_AVSZ3);
 #ifdef GTE_LOG
 	GTE_LOG("GTE AVSZ3\n");
 #endif
@@ -509,6 +662,7 @@ void gteAVSZ3(void) {
 }
 
 void gteAVSZ4(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_AVSZ4);
 #ifdef GTE_LOG
 	GTE_LOG("GTE AVSZ4\n");
 #endif
@@ -520,6 +674,7 @@ void gteAVSZ4(void) {
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
 void gteSQR(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_SQR);
 	int shift = 12 * GTE_SF(gteop);
 	int lm = GTE_LM(gteop);
 
@@ -537,6 +692,7 @@ void gteSQR(u32 gteop) {
 }
 
 void gteNCCS(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_NCCS);
 #ifdef GTE_LOG
 	GTE_LOG("GTE NCCS\n");
 #endif
@@ -570,6 +726,7 @@ void gteNCCS(void) {
 }
 
 void gteNCCT(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_NCCT);
 	int v;
 	s32 vx, vy, vz;
 
@@ -611,6 +768,7 @@ void gteNCCT(void) {
 }
 
 void gteNCDS(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_NCDS);
 #ifdef GTE_LOG
 	GTE_LOG("GTE NCDS\n");
 #endif
@@ -644,6 +802,7 @@ void gteNCDS(void) {
 }
 
 void gteNCDT(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_NCDT);
 	int v;
 	s32 vx, vy, vz;
 
@@ -686,6 +845,7 @@ void gteNCDT(void) {
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
 void gteOP(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_OP);
 	int shift = 12 * GTE_SF(gteop);
 	int lm = GTE_LM(gteop);
 
@@ -704,6 +864,7 @@ void gteOP(u32 gteop) {
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
 void gteDCPL(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_DCPL);
 	int lm = GTE_LM(gteop);
 
 	s32 RIR1 = ((s32)gteR * gteIR1) >> 8;
@@ -733,6 +894,7 @@ void gteDCPL(u32 gteop) {
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
 void gteGPF(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_GPF);
 	int shift = 12 * GTE_SF(gteop);
 
 #ifdef GTE_LOG
@@ -757,6 +919,7 @@ void gteGPF(u32 gteop) {
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
 void gteGPL(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_GPL);
 	int shift = 12 * GTE_SF(gteop);
 
 #ifdef GTE_LOG
@@ -781,6 +944,7 @@ void gteGPL(u32 gteop) {
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
 void gteDPCS(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_DPCS);
 	int shift = 12 * GTE_SF(gteop);
 
 #ifdef GTE_LOG
@@ -804,6 +968,7 @@ void gteDPCS(u32 gteop) {
 }
 
 void gteDPCT(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_DPCT);
 	int v;
 
 #ifdef GTE_LOG
@@ -829,6 +994,7 @@ void gteDPCT(void) {
 }
 
 void gteNCS(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_NCS);
 #ifdef GTE_LOG
 	GTE_LOG("GTE NCS\n");
 #endif
@@ -856,6 +1022,7 @@ void gteNCS(void) {
 }
 
 void gteNCT(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_NCT);
 	int v;
 	s32 vx, vy, vz;
 
@@ -890,6 +1057,7 @@ void gteNCT(void) {
 }
 
 void gteCC(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_CC);
 #ifdef GTE_LOG
 	GTE_LOG("GTE CC\n");
 #endif
@@ -917,7 +1085,76 @@ void gteCC(void) {
 }
 
 // NOTE: 'gteop' parameter is instruction opcode shifted right 10 places.
+template<int SHIFT, int LM>
+static void gteINTPL_const(void) {
+	const int shift_const = SHIFT;
+	const int lm = LM;
+
+#ifdef GTE_LOG
+	GTE_LOG("GTE INTPL\n");
+#endif
+	gteFLAG = 0;
+
+	/* IR1..3 are signed 16-bit values.  Multiplication is defined for the
+	 * complete range and avoids left-shifting a negative signed int. */
+	gteMAC1 = ((gteIR1 * 4096) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift_const;
+	gteMAC2 = ((gteIR2 * 4096) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift_const;
+	gteMAC3 = ((gteIR3 * 4096) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift_const;
+	gteIR1 = limB1(gteMAC1, lm);
+	gteIR2 = limB2(gteMAC2, lm);
+	gteIR3 = limB3(gteMAC3, lm);
+	gteRGB0 = gteRGB1;
+	gteRGB1 = gteRGB2;
+	gteCODE2 = gteCODE;
+	gteR2 = limC1(gteMAC1 >> 4);
+	gteG2 = limC2(gteMAC2 >> 4);
+	gteB2 = limC3(gteMAC3 >> 4);
+}
+
+#if QPSX_GTE_INTPL_OPTIMIZE
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s0_l0(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<0, 0>(); }
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s0_l1(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<0, 1>(); }
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s1_l0(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<12, 0>(); }
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s1_l1(void) { QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_const<12, 1>(); }
+#endif
+
+#if QPSX_GTE_INTPL_COMPACT
+/* Compact variant: specialize only SF (the expensive shift), while keeping
+ * LM as an opcode argument.  This preserves exact semantics with two small
+ * bodies instead of four separately generated SF/LM combinations. */
+template<int SHIFT>
+static void gteINTPL_compact(u32 gteop) {
+	const int lm = GTE_LM(gteop);
+	gteFLAG = 0;
+	gteMAC1 = ((gteIR1 * 4096) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> SHIFT;
+	gteMAC2 = ((gteIR2 * 4096) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> SHIFT;
+	gteMAC3 = ((gteIR3 * 4096) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> SHIFT;
+	gteIR1 = limB1(gteMAC1, lm);
+	gteIR2 = limB2(gteMAC2, lm);
+	gteIR3 = limB3(gteMAC3, lm);
+	gteRGB0 = gteRGB1;
+	gteRGB1 = gteRGB2;
+	gteCODE2 = gteCODE;
+	gteR2 = limC1(gteMAC1 >> 4);
+	gteG2 = limC2(gteMAC2 >> 4);
+	gteB2 = limC3(gteMAC3 >> 4);
+}
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s0_compact(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_compact<0>(gteop);
+}
+__attribute__((optimize("O3"), hot))
+void gteINTPL_s1_compact(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL); gteINTPL_compact<12>(gteop);
+}
+#endif
+
 void gteINTPL(u32 gteop) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_INTPL);
 	int shift = 12 * GTE_SF(gteop);
 	int lm = GTE_LM(gteop);
 
@@ -926,9 +1163,9 @@ void gteINTPL(u32 gteop) {
 #endif
 	gteFLAG = 0;
 
-	gteMAC1 = ((gteIR1 << 12) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift;
-	gteMAC2 = ((gteIR2 << 12) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift;
-	gteMAC3 = ((gteIR3 << 12) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift;
+	gteMAC1 = ((gteIR1 * 4096) + (gteIR0 * limB1(A1U((s64)gteRFC - gteIR1), 0))) >> shift;
+	gteMAC2 = ((gteIR2 * 4096) + (gteIR0 * limB2(A2U((s64)gteGFC - gteIR2), 0))) >> shift;
+	gteMAC3 = ((gteIR3 * 4096) + (gteIR0 * limB3(A3U((s64)gteBFC - gteIR3), 0))) >> shift;
 	gteIR1 = limB1(gteMAC1, lm);
 	gteIR2 = limB2(gteMAC2, lm);
 	gteIR3 = limB3(gteMAC3, lm);
@@ -941,6 +1178,7 @@ void gteINTPL(u32 gteop) {
 }
 
 void gteCDP(void) {
+	QPSX_GTE_COUNT(QPSX_GTE_COUNT_CDP);
 #ifdef GTE_LOG
 	GTE_LOG("GTE CDP\n");
 #endif

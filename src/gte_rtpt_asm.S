@@ -1,0 +1,340 @@
+/***************************************************************************
+ * QPSX RTPT common-case kernel
+ *
+ * This is intentionally a separate object from the legacy diagnostic GTE
+ * assembly file. The legacy file contains experimental stubs with C-only
+ * symbols; keeping this leaf kernel isolated lets the linker pull it in
+ * without dragging those unresolved experiments into Linux builds.
+ *
+ * The caller selects this routine only for the explicit SF2000 A/B build.
+ * It implements the normal PS1 fixed-point envelope, uses the MIPS32 HI/LO
+ * multiply accumulator, and makes no C calls on the common path.  It checks
+ * every signed-32, IR, depth, projection, divide and IR0 envelope before
+ * exposing an exceptional result.  Any outlier returns 0 after restoring
+ * callee state; the C wrapper then reruns the exact PS1 saturation/overflow
+ * implementation.
+ ***************************************************************************/
+
+.set noreorder
+.set noat
+
+#include "gte_rtpt_layout.h"
+
+/* Short aliases keep the instruction body readable; values come exclusively
+ * from gte_rtpt_layout.h, which is also checked by C++. */
+#define OFF_CP2D QPSX_RTPT_OFF_CP2D
+#define OFF_CP2C QPSX_RTPT_OFF_CP2C
+#define OFF_SZ0 QPSX_RTPT_OFF_SZ0
+#define OFF_SZ1 QPSX_RTPT_OFF_SZ1
+#define OFF_SZ2 QPSX_RTPT_OFF_SZ2
+#define OFF_SZ3 QPSX_RTPT_OFF_SZ3
+#define OFF_IR0 QPSX_RTPT_OFF_IR0
+#define OFF_IR1 QPSX_RTPT_OFF_IR1
+#define OFF_IR2 QPSX_RTPT_OFF_IR2
+#define OFF_IR3 QPSX_RTPT_OFF_IR3
+#define OFF_SXY0 QPSX_RTPT_OFF_SXY0
+#define OFF_SXY1 QPSX_RTPT_OFF_SXY1
+#define OFF_SXY2 QPSX_RTPT_OFF_SXY2
+#define OFF_MAC0 QPSX_RTPT_OFF_MAC0
+#define OFF_MAC1 QPSX_RTPT_OFF_MAC1
+#define OFF_MAC2 QPSX_RTPT_OFF_MAC2
+#define OFF_MAC3 QPSX_RTPT_OFF_MAC3
+#define OFF_R11 QPSX_RTPT_OFF_R11
+#define OFF_R12 QPSX_RTPT_OFF_R12
+#define OFF_R13 QPSX_RTPT_OFF_R13
+#define OFF_R21 QPSX_RTPT_OFF_R21
+#define OFF_R22 QPSX_RTPT_OFF_R22
+#define OFF_R23 QPSX_RTPT_OFF_R23
+#define OFF_R31 QPSX_RTPT_OFF_R31
+#define OFF_R32 QPSX_RTPT_OFF_R32
+#define OFF_R33 QPSX_RTPT_OFF_R33
+#define OFF_TRX QPSX_RTPT_OFF_TRX
+#define OFF_TRY QPSX_RTPT_OFF_TRY
+#define OFF_TRZ QPSX_RTPT_OFF_TRZ
+#define OFF_OFX QPSX_RTPT_OFF_OFX
+#define OFF_OFY QPSX_RTPT_OFF_OFY
+#define OFF_H QPSX_RTPT_OFF_H
+#define OFF_DQA QPSX_RTPT_OFF_DQA
+#define OFF_DQB QPSX_RTPT_OFF_DQB
+#define OFF_FLAG QPSX_RTPT_OFF_FLAG
+
+.text
+.align 2
+.globl gte_RTPT_asm
+.ent gte_RTPT_asm
+gte_RTPT_asm:
+    /* Keep the nine matrix terms in callee-saved registers for all vertices.
+     * This leaf does not touch gp or ra; the frame also saves the original
+     * SZ3 needed by an exception fallback. */
+    addiu   $sp, $sp, -40
+    sw      $s0, 0($sp)
+    sw      $s1, 4($sp)
+    sw      $s2, 8($sp)
+    sw      $s3, 12($sp)
+    sw      $s4, 16($sp)
+    sw      $s5, 20($sp)
+    sw      $s6, 24($sp)
+    sw      $s7, 28($sp)
+
+    la      $t0, psxRegs
+
+    lh      $s0, OFF_R11($t0)
+    lh      $s1, OFF_R12($t0)
+    lh      $s2, OFF_R13($t0)
+    lh      $s3, OFF_R21($t0)
+    lh      $s4, OFF_R22($t0)
+    lh      $s5, OFF_R23($t0)
+    lh      $s6, OFF_R31($t0)
+    lh      $s7, OFF_R32($t0)
+
+    lw      $t1, OFF_TRX($t0)
+    lw      $t2, OFF_TRY($t0)
+    lw      $t3, OFF_TRZ($t0)
+    lhu     $t4, OFF_H($t0)
+    lw      $t5, OFF_OFX($t0)
+    lw      $t6, OFF_OFY($t0)
+    lh      $t7, OFF_DQA($t0)
+    lw      $t8, OFF_DQB($t0)
+
+    /* RTPT's depth FIFO shifts SZ3 into SZ0 before producing SZ1..SZ3. */
+    lhu     $t9, OFF_SZ3($t0)
+    sh      $t9, 32($sp)                /* restore if vertex three falls back */
+    sh      $t9, OFF_SZ0($t0)
+    sw      $zero, OFF_FLAG($t0)
+    /* R33 is invariant across all three vertices.  Keep it in T9; A3 is
+     * free again after the depth divide and is used as the carry scratch for
+     * the 64-bit screen-offset products. */
+    lh      $t9, OFF_R33($t0)
+
+.macro RTPT_VERTEX VXYOFF,VZOFF,SXYOFF,SZOFF
+    lh      $a0, \VXYOFF($t0)          /* vx */
+    lh      $a1, \VXYOFF+2($t0)        /* vy */
+    lh      $a2, \VZOFF($t0)           /* vz */
+    /* MAC1 = TRX + (R11*vx + R12*vy + R13*vz) / 4096. */
+    sll     $v0, $t1, 12
+    sra     $v1, $t1, 20
+    mtlo    $v0
+    mthi    $v1
+    madd    $s0, $a0
+    madd    $s1, $a1
+    madd    $s2, $a2
+    mflo    $v0
+    mfhi    $v1
+    sra     $a3, $v1, 12              /* A1: signed 64->32 overflow guard */
+    srl     $v0, $v0, 12
+    sll     $v1, $v1, 20
+    addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
+    sw      $v0, OFF_MAC1($t0)
+    /* limB1: reject an IR1 saturation and let the exact C path set FLAG. */
+    sll     $v1, $v0, 16
+    sra     $v1, $v1, 16
+    beq     $v1, $v0, 9f
+    sh      $v0, OFF_IR1($t0)            /* common case: fill the delay slot */
+    b       RTPT_FAIL
+    nop
+9:
+
+    /* MAC2 = TRY + (R21*vx + R22*vy + R23*vz) / 4096. */
+    sll     $v0, $t2, 12
+    sra     $v1, $t2, 20
+    mtlo    $v0
+    mthi    $v1
+    madd    $s3, $a0
+    madd    $s4, $a1
+    madd    $s5, $a2
+    mflo    $v0
+    mfhi    $v1
+    sra     $a3, $v1, 12              /* A2: signed 64->32 overflow guard */
+    srl     $v0, $v0, 12
+    sll     $v1, $v1, 20
+    addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
+    sw      $v0, OFF_MAC2($t0)
+    /* limB2: reject an IR2 saturation and let the exact C path set FLAG. */
+    sll     $v1, $v0, 16
+    sra     $v1, $v1, 16
+    beq     $v1, $v0, 9f
+    sh      $v0, OFF_IR2($t0)            /* common case: fill the delay slot */
+    b       RTPT_FAIL
+    nop
+9:
+
+    /* MAC3/depth = TRZ + (R31*vx + R32*vy + R33*vz) / 4096. */
+    sll     $v0, $t3, 12
+    sra     $v1, $t3, 20
+    mtlo    $v0
+    mthi    $v1
+    madd    $s6, $a0
+    madd    $s7, $a1
+    madd    $t9, $a2
+    mflo    $v0
+    mfhi    $v1
+    sra     $a3, $v1, 12              /* A3: signed 64->32 overflow guard */
+    srl     $v0, $v0, 12
+    sll     $v1, $v1, 20
+    addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
+    sw      $v0, OFF_MAC3($t0)
+    /* limB3: reject an IR3 saturation and let the exact C path set FLAG. */
+    sll     $v1, $v0, 16
+    sra     $v1, $v1, 16
+    beq     $v1, $v0, 9f
+    sh      $v0, OFF_IR3($t0)            /* common case: fill the delay slot */
+    b       RTPT_FAIL
+    nop
+9:
+    /* limD: reject an unsigned 16-bit depth saturation. */
+    srl     $v1, $v0, 16
+    beq     $v1, $zero, 6f
+    nop
+    b       RTPT_FAIL
+    nop
+6:
+    sh      $v0, \SZOFF($t0)
+
+    /* Native MIPS divide implements H << 16 / SZ.  GAS's two-operand
+     * `divu rd,rs,rt` pseudo emits a software BREAK on a zero denominator
+     * (and an unnecessary MFLO into rd).  A clipped zero-depth vertex is
+     * legal in the PS1 scene stream, so use the real three-operand encoding
+     * and fall back to the exact C path for the capped/zero case instead of
+     * trapping or silently dropping the divide-overflow flag. */
+    /* SZ is the clamped low half of MAC3 in the common positive-depth
+     * envelope.  Reusing V0 avoids a dependent D-cache load per vertex. */
+    andi    $a3, $v0, 0xffff
+    sll     $v0, $t4, 16
+    /* DIVIDE returns 0xffffffff (then limE caps to 0x1ffff) whenever
+     * H >= 2*SZ.  Preserve that behavior instead of producing an enormous
+     * quotient that wraps screen coordinates. */
+    beq     $a3, $zero, RTPT_FAIL
+    nop
+    sll     $v1, $a3, 1
+    sltu    $v1, $t4, $v1
+    beq     $v1, $zero, RTPT_FAIL
+    nop
+    .word   0x0047001b                   /* divu $zero,$v0,$a3 */
+    mflo    $a2                         /* quotient, retained for Y/IR0 */
+    b       4f
+    nop
+4:
+    lh      $a0, OFF_IR1($t0)
+    lh      $a1, OFF_IR2($t0)
+
+    /* SX = (OFX + IR1*quotient) >> 16. */
+    mult    $a0, $a2
+    mflo    $v0
+    mfhi    $v1
+    sra     $a3, $t5, 31
+    addu    $v1, $v1, $a3
+    addu    $v0, $v0, $t5
+    sltu    $a3, $v0, $t5
+    addu    $v1, $v1, $a3
+    srl     $v0, $v0, 16
+    sra     $a3, $v1, 16              /* signed 64->32 guard after >>16 */
+    sll     $v1, $v1, 16
+    addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
+    /* limG1: reject screen-X clipping and let C preserve its FLAG bit. */
+    addiu   $a3, $v0, 1024
+    sltiu   $v1, $a3, 2048
+    bne     $v1, $zero, 5f
+    sh      $v0, \SXYOFF($t0)             /* common case: fill the delay slot */
+    b       RTPT_FAIL
+    nop
+5:
+
+    /* SY = (OFY + IR2*quotient) >> 16. */
+    mult    $a1, $a2
+    mflo    $v0
+    mfhi    $v1
+    sra     $a3, $t6, 31
+    addu    $v1, $v1, $a3
+    addu    $v0, $v0, $t6
+    sltu    $a3, $v0, $t6
+    addu    $v1, $v1, $a3
+    srl     $v0, $v0, 16
+    sra     $a3, $v1, 16              /* signed 64->32 guard after >>16 */
+    sll     $v1, $v1, 16
+    addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a3, $v1, RTPT_FAIL
+    nop
+    /* limG2: reject screen-Y clipping and let the exact C path set FLAG. */
+    addiu   $a3, $v0, 1024
+    sltiu   $v1, $a3, 2048
+    bne     $v1, $zero, 5f
+    sh      $v0, \SXYOFF+2($t0)           /* common case: fill the delay slot */
+    b       RTPT_FAIL
+    nop
+5:
+.endm
+
+    RTPT_VERTEX OFF_CP2D+0, OFF_CP2D+4, OFF_SXY0, OFF_SZ1
+    RTPT_VERTEX OFF_CP2D+8, OFF_CP2D+12, OFF_SXY1, OFF_SZ2
+    RTPT_VERTEX OFF_CP2D+16, OFF_CP2D+20, OFF_SXY2, OFF_SZ3
+
+    /* MAC0/IR0 use the final vertex quotient, just as the C implementation. */
+    mult    $t7, $a2
+    mflo    $v0
+    mfhi    $v1
+    sra     $a3, $t8, 31
+    addu    $v1, $v1, $a3
+    addu    $v0, $v0, $t8
+    sltu    $a3, $v0, $t8
+    addu    $v1, $v1, $a3
+    sra     $a0, $v1, 12              /* F: preserve MAC0 overflow flags */
+    sw      $v0, OFF_MAC0($t0)
+    srl     $v0, $v0, 12
+    sll     $v1, $v1, 20
+    addu    $v0, $v0, $v1
+    sra     $v1, $v0, 31
+    bne     $a0, $v1, RTPT_FAIL
+    nop
+    /* limH: reject IR0 clipping and let the exact C path set FLAG. */
+    sltiu   $v1, $v0, 4097
+    bne     $v1, $zero, 2f
+    sh      $v0, OFF_IR0($t0)             /* common case: fill the delay slot */
+    b       RTPT_FAIL
+    nop
+2:
+
+    lw      $s0, 0($sp)
+    lw      $s1, 4($sp)
+    lw      $s2, 8($sp)
+    lw      $s3, 12($sp)
+    lw      $s4, 16($sp)
+    lw      $s5, 20($sp)
+    lw      $s6, 24($sp)
+    lw      $s7, 28($sp)
+    addiu   $sp, $sp, 40
+    li      $v0, 1
+    jr      $ra
+    nop
+
+RTPT_FAIL:
+    /* Restore the callee-saved register set.  The C caller resets FLAG and
+     * rewrites every RTPT-visible register, so partial speculative stores
+     * above are harmless. */
+    lhu     $t9, 32($sp)
+    sh      $t9, OFF_SZ3($t0)
+    lw      $s0, 0($sp)
+    lw      $s1, 4($sp)
+    lw      $s2, 8($sp)
+    lw      $s3, 12($sp)
+    lw      $s4, 16($sp)
+    lw      $s5, 20($sp)
+    lw      $s6, 24($sp)
+    lw      $s7, 28($sp)
+    addiu   $sp, $sp, 40
+    move    $v0, $zero
+    jr      $ra
+    nop
+.end gte_RTPT_asm

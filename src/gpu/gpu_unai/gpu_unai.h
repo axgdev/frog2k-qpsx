@@ -40,18 +40,41 @@
 //#define GPU_UNAI_USE_FLOAT_DIV_MULTINV // If GPU_UNAI_USE_FLOATMATH is defined,
                                          //  use multiply-by-inverse for division
 
+/* A small normalized reciprocal table is an optional Linux experiment.  The
+ * stock Linux build uses the exact MIPS integer divide because the historical
+ * 16-bit table consumed 256 KiB and polluted the 16 KiB D-cache.  A 8/10-bit
+ * table keeps the reciprocal path cache-sized and, unlike the float path,
+ * performs no FPU work on the target. */
+#ifndef QPSX_GPU_RECIP_TABLE_BITS
+#define QPSX_GPU_RECIP_TABLE_BITS 0
+#endif
+#if QPSX_GPU_RECIP_TABLE_BITS && !defined(GPU_UNAI_USE_INT_DIV_MULTINV)
+#define GPU_UNAI_USE_INT_DIV_MULTINV
+#endif
+
 /*
  * QPSX_080: GPU Optimization - Reciprocal Division
  *
- * Enabled for SF2000 (MIPS32 without FPU). Replaces expensive integer
- * division (~35 cycles) with multiply-by-reciprocal (~6 cycles).
- * Uses 512-entry lookup table (2KB) for reciprocals.
+ * Replaces integer division with multiply-by-reciprocal on platforms where
+ * the lookup table is a good trade. The table is 256 KiB in this version,
+ * so Linux on the cache-constrained HC15xx uses exact MIPS integer division
+ * during polygon setup instead.
  *
  * Speedup: ~5-10% for polygon-heavy scenes
  * Visual impact: Minimal (slight rounding differences, usually invisible)
  */
+#if !defined(QPSX_PLATFORM_LINUX) || !QPSX_PLATFORM_LINUX
 #define GPU_UNAI_USE_INT_DIV_MULTINV   // If GPU_UNAI_USE_FLOATMATH is *not*
                                          //  defined, use old inaccurate division
+#endif
+
+/* Optional SF2000 4bpp packed-palette cache.  The cache is deliberately
+ * compile-time gated: the normal core keeps the gpu_unai state and its small
+ * data-cache footprint unchanged.  The experimental path materializes the
+ * two 16-bit CLUT results for each possible source byte in a 1 KiB table. */
+#ifndef QPSX_GPU_4BPP_PALETTE_LUT
+#define QPSX_GPU_4BPP_PALETTE_LUT 0
+#endif
 
 /*
  * QPSX_081: GPU Optimization - Fast Lighting
@@ -216,6 +239,13 @@ struct gpu_unai_t {
 
 	u16* TBA;              // Ptr to current texture in VRAM
 	u16* CBA;              // Ptr to current CLUT in VRAM
+#if QPSX_GPU_4BPP_PALETTE_LUT
+	/* Mutable because the span helper receives a const GPU state reference;
+	 * the table is populated lazily by the first eligible span after each
+	 * GP0 texture/CLUT selection. */
+	mutable u32 CBA4Packed[256];
+	mutable bool CBA4PackedValid;
+#endif
 
 	////////////////////////////////////////////////////////////////////////////
 	//  Inner Loop parameters
@@ -288,7 +318,25 @@ static inline bool LightingEnabled()
 
 static inline bool FastLightingEnabled()
 {
+#ifndef QPSX_GPU_FIXED_FAST_PATH
+#define QPSX_GPU_FIXED_FAST_PATH 0
+#endif
+#ifndef QPSX_GPU_FIXED_LIGHTING
+#define QPSX_GPU_FIXED_LIGHTING QPSX_GPU_FIXED_FAST_PATH
+#endif
+#if QPSX_GPU_FIXED_LIGHTING
+	/* Linux production keeps this option permanently enabled.  Returning a
+	 * compile-time constant removes a mutable bitfield load and branch from
+	 * every lit pixel; other ports retain their runtime option semantics. */
+	return true;
+#elif QPSX_GPU_FIXED_FAST_PATH
+	/* Keep the A/B experiment compile-time exact: with the general fixed fast
+	 * path enabled but lighting explicitly disabled, select the original LUT
+	 * implementation without reintroducing a per-pixel option load. */
+	return false;
+#else
 	return gpu_unai.config.fast_lighting;
+#endif
 }
 
 static inline bool BlendingEnabled()
@@ -308,7 +356,11 @@ static inline bool BlendingEnabled()
  */
 static inline bool FastBlendingEnabled()
 {
+#if QPSX_GPU_FIXED_FAST_PATH
+	return true;
+#else
 	return gpu_unai.config.fast_blending;
+#endif
 }
 
 static inline bool DitheringEnabled()

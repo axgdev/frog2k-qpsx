@@ -60,7 +60,42 @@ CP2_FUNC_0(RTPT)
 CP2_FUNC_0(NCCT)
 CP2_FUNC_1(OP)
 CP2_FUNC_1(DPCS)
+
+#if QPSX_GTE_INTPL_OPTIMIZE
+/* INTPL's only variable fields are SF and LM. They are known when the block
+ * is translated, so direct calls avoid loading psxRegs.code into A0 and let
+ * the callee fold both the shift and lower-margin branch. */
+extern void gteINTPL_s0_l0(void);
+extern void gteINTPL_s0_l1(void);
+extern void gteINTPL_s1_l0(void);
+extern void gteINTPL_s1_l1(void);
+static void recINTPL()
+{
+	const unsigned key = ((psxRegs.code >> 19) & 1) << 1 |
+	                     ((psxRegs.code >> 10) & 1);
+	switch (key) {
+	case 0: JAL(gteINTPL_s0_l0); break;
+	case 1: JAL(gteINTPL_s0_l1); break;
+	case 2: JAL(gteINTPL_s1_l0); break;
+	default: JAL(gteINTPL_s1_l1); break;
+	}
+	NOP();
+}
+#elif QPSX_GTE_INTPL_COMPACT
+extern void gteINTPL_s0_compact(u32 gteop);
+extern void gteINTPL_s1_compact(u32 gteop);
+static void recINTPL()
+{
+	if ((psxRegs.code >> 19) & 1)
+		JAL(gteINTPL_s1_compact);
+	else
+		JAL(gteINTPL_s0_compact);
+	LI16(MIPSREG_A0, (u16)(psxRegs.code >> 10));
+}
+#else
 CP2_FUNC_1(INTPL)
+#endif
+
 CP2_FUNC_1(MVMVA)
 CP2_FUNC_1(SQR)
 CP2_FUNC_1(DCPL)

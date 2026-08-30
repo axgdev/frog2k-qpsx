@@ -417,12 +417,12 @@ void vout_update(void)
 	int w0 = gpu.screen.hres;
 	int h0 = gpu.screen.vres;
 	int h1 = gpu.screen.h;
+	unsigned output_offset = 0;
 
 	if (w0 == 0 || h0 == 0)
 		return;
 
 	bool isRGB24 = gpu.status.rgb24;
-	u16* dst16 = SCREEN;
 	u16* src16 = (u16*)gpu.vram;
 
 	unsigned int src16_offs_msk = 1024*512-1;
@@ -438,11 +438,31 @@ void vout_update(void)
 		src16_offs = (src16_offs + (((h1-h0) / 2) * 1024)) & src16_offs_msk;
 		h1 = h0;
 	} else if (h1 < h0) {
-		dst16 += ((h0-h1) >> sizeShift) * VIDEO_WIDTH;
+		output_offset = ((unsigned)(h0 - h1) >> sizeShift) * VIDEO_WIDTH;
 	}
 
 	int incY = (h0 == 480) ? 2 : 1;
 	h0 = ((h0 == 480) ? 2048 : 1024);
+
+#if QPSX_GE_RAW_VRAM
+	/*
+	 * The PS1 GPU stores display pixels as native BGR555 (red in bits 0..4).
+	 * On the Linux NOMMU target malloc returns a cached KSEG0 pointer, so the
+	 * GE can read that VRAM directly and perform the BGR555 -> RGB565
+	 * conversion while
+	 * it stretches to scanout.  This removes the per-pixel CPU conversion in
+	 * all ordinary 240-line modes.  480-line/interlaced output and 24-bit
+	 * output are deliberately left on the exact RGB565 fallback: their rows
+	 * are not contiguous in the source window or need byte unpacking.
+	 */
+	if (!isRGB24 && incY == 1 && h1 <= 320 && w0 <= 512 &&
+		video_flip_vram(src16 + src16_offs, (unsigned)w0, (unsigned)h1,
+			(size_t)h0 * sizeof(*src16)))
+		return;
+#endif
+
+	u16* output = video_acquire_framebuffer();
+	u16* dst16 = output + output_offset;
 
 	switch ( w0 )
 	{
@@ -496,7 +516,7 @@ void vout_update(void)
 		} break;
 	}
 
-	video_flip();
+	video_flip_framebuffer(output);
 }
 
 int vout_init(void)

@@ -124,7 +124,11 @@ long GPU_init(void)
 	// s_invTable
 	for(unsigned int i=1;i<=(1<<TABLE_BITS);++i)
 	{
-		s_invTable[i-1]=0x7fffffff/i;
+		/* Keep the standalone path integer-only as well.  Linux normally uses
+		 * gpulib_if.cpp, but this avoids reintroducing a soft-float startup
+		 * divide in SDL/diagnostic builds that select the same table. */
+		const unsigned int numerator = 0x7fffffffu;
+		s_invTable[i-1]=(s32)(numerator/i);
 	}
 #endif
 

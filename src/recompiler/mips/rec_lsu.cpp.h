@@ -269,7 +269,42 @@ static u32 emitAddressConversion(const u32 op_rs,
 		//            handle the three 2MB PS1 RAM mirrors. Caller knows it can
 		//            only use the converted base reg to access PS1 RAM.
 
+		#if QPSX_MIPS_PSMEM_REG && QPSX_MIPS_FAST_MEM_CONVERT
+		/* The normal callers use a temporary destination (T0/T1) while
+		 * guest base registers live in S0-S6.  Mask in-place and add the
+		 * stable base, avoiding the old MOV $s7,dest.  If a future caller
+		 * aliases the destination, use the supplied temporary as the result
+		 * so the guest base and the stable $s7 pointer both survive. */
+		if (desired_reg != rs && desired_reg != PERM_REG_2) {
+		#ifdef HAVE_MIPS32R2_EXT_INS
+		EXT(desired_reg, rs, 0, 21);
+		#else
+		SLL(desired_reg, rs, 11);
+		SRL(desired_reg, desired_reg, 11);
+		#endif
+			ADDU(desired_reg, PERM_REG_2, desired_reg);
+			return desired_reg;
+		}
+		if (tmp_reg != rs && tmp_reg != PERM_REG_2) {
+			#ifdef HAVE_MIPS32R2_EXT_INS
+			EXT(tmp_reg, rs, 0, 21);
+			#else
+			SLL(tmp_reg, rs, 11);
+			SRL(tmp_reg, tmp_reg, 11);
+			#endif
+			ADDU(tmp_reg, PERM_REG_2, tmp_reg);
+			return tmp_reg;
+		}
+		/* The emitter's register contract makes this unreachable; retain the
+		 * original sequence for a defensive build if that contract changes. */
+		MOV(desired_reg, PERM_REG_2);
+		#else
+		#if QPSX_MIPS_PSMEM_REG
+		/* Copy the stable base; tmp_reg is filled by the mask below. */
+		MOV(desired_reg, PERM_REG_2);
+		#else
 		LW(desired_reg, PERM_REG_1, off(psxM));
+		#endif
 #ifdef HAVE_MIPS32R2_EXT_INS
 		EXT(tmp_reg, rs, 0, 21);  // tmp_reg = rs & 0x001f_ffff
 #else
@@ -277,6 +312,7 @@ static u32 emitAddressConversion(const u32 op_rs,
 		SRL(tmp_reg, tmp_reg, 11);
 #endif
 		ADDU(desired_reg, desired_reg, tmp_reg);
+		#endif
 	}
 
 	return desired_reg;
@@ -958,7 +994,13 @@ static void general_loads_stores(const int  count,
 	if (emit_indirect)
 	{
 		enum { WIDTH_8, WIDTH_16, WIDTH_32 };
-		const uptr mem_read_func[]  = { (uptr)psxMemRead8,  (uptr)psxMemRead16,  (uptr)psxMemRead32  };
+		const uptr mem_read_func[]  = {
+#if defined(QPSX_MIPS_ASM_MEM_READS) && QPSX_MIPS_ASM_MEM_READS
+			(uptr)psxMemRead8_asm, (uptr)psxMemRead16_asm, (uptr)psxMemRead32_asm
+#else
+			(uptr)psxMemRead8, (uptr)psxMemRead16, (uptr)psxMemRead32
+#endif
+		};
 		const uptr mem_write_func[] = { (uptr)psxMemWrite8, (uptr)psxMemWrite16, (uptr)psxMemWrite32 };
 		const uptr *read_func  = mem_read_func;
 		const uptr *write_func = mem_write_func;
@@ -1021,9 +1063,53 @@ static void general_loads_stores(const int  count,
 						MOV(MIPSREG_A1, rt); // <BD> Branch delay slot
 						break;
 					case 0xac000000: // SW
-						ADDIU(MIPSREG_A0, rs, op_imm);
-						JAL(write_func[WIDTH_32]);
-						MOV(MIPSREG_A1, rt); // <BD> Branch delay slot
+						// QPSX scratchpad fast path: 0x1f80_0000..0x1f80_03ff maps
+						// to psxH[addr & 0xffff] (scratchpad is the hot GPU-FIFO
+						// region for PS1 3D games). The helper-call fallback below
+						// still handles hardware registers and mirror regions.
+						{
+							u32 *label_slow_1 = 0, *label_slow_2 = 0, *label_done = 0;
+							ADDIU(MIPSREG_A0, rs, op_imm);       // eff addr (also the helper arg)
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							/* Exact unsigned interval test: addr - 0x1f800000 < 0x400.
+							 * This replaces two dependent branches with one on the hot
+							 * canonical scratchpad path. Segment aliases keep the helper. */
+							LUI(TEMP_1, 0xe080);
+							ADDU(TEMP_1, MIPSREG_A0, TEMP_1);
+							SLTIU(TEMP_1, TEMP_1, 0x400);
+							label_slow_1 = (u32 *)recMem;
+							BEQZ(TEMP_1, 0);
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);
+#else
+							SRL(TEMP_1, MIPSREG_A0, 16);         // t = addr >> 16
+							XORI(TEMP_1, TEMP_1, 0x1f80);        // t == 0x1f80 ?
+							label_slow_1 = (u32 *)recMem;
+							BNE(TEMP_1, 0, 0);                   // not the scratchpad/hw region
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);    // <BD> m = addr & 0xffff
+							SLTIU(TEMP_3, TEMP_2, 0x400);         // m < 0x400 (scratchpad)?
+							label_slow_2 = (u32 *)recMem;
+							BEQZ(TEMP_3, 0);                     // hardware regs -> helper
+							LUI(TEMP_3, ADR_HI((uptr)psxH));     // <BD> psxH high half
+#endif
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							LUI(TEMP_3, ADR_HI((uptr)psxH));
+#endif
+							ADDU(TEMP_3, TEMP_3, TEMP_2);         // psxH + m
+							LSU_OPCODE(0xac000000, rt, TEMP_3, ADR_LO((uptr)psxH)); // SW rt, lo(psxH)(temp_3)
+							label_done = (u32 *)recMem;
+							B(0);                                // b done
+							NOP();                               // <BD>
+							fixup_branch(label_slow_1);
+							if (label_slow_2)
+								fixup_branch(label_slow_2);
+						/* The preceding tests prove a real 0x1f80xxxx hardware
+						 * address (not scratchpad).  Bypass psxMemWrite32's
+						 * duplicate region/LUT dispatch; psxHwWrite32 also handles
+						 * the ROM/cache-control cases used by the recompiler. */
+							JAL(psxHwWrite32);                  // addr already in $a0
+							MOV(MIPSREG_A1, rt);                 // <BD> value arg
+							fixup_branch(label_done);
+						}
 						break;
 					case 0xa8000000: // SWL
 					case 0xb8000000: // SWR
@@ -1145,10 +1231,47 @@ static void general_loads_stores(const int  count,
 						}
 						break;
 					case 0x8c000000: // LW
-						JAL(read_func[WIDTH_32]);   // result in MIPSREG_V0
-						ADDIU(MIPSREG_A0, rs, op_imm); // <BD> Branch delay slot
-						if (op_rt) {
-							MOV(rt, MIPSREG_V0);
+						// QPSX scratchpad fast path (see the SW case above).
+						{
+							u32 *label_slow_1 = 0, *label_slow_2 = 0, *label_done = 0;
+							ADDIU(MIPSREG_A0, rs, op_imm);       // eff addr (also the helper arg)
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							LUI(TEMP_1, 0xe080);
+							ADDU(TEMP_1, MIPSREG_A0, TEMP_1);
+							SLTIU(TEMP_1, TEMP_1, 0x400);
+							label_slow_1 = (u32 *)recMem;
+							BEQZ(TEMP_1, 0);
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);
+#else
+							SRL(TEMP_1, MIPSREG_A0, 16);         // t = addr >> 16
+							XORI(TEMP_1, TEMP_1, 0x1f80);        // t == 0x1f80 ?
+							label_slow_1 = (u32 *)recMem;
+							BNE(TEMP_1, 0, 0);                   // not the scratchpad/hw region
+							ANDI(TEMP_2, MIPSREG_A0, 0xffff);    // <BD> m = addr & 0xffff
+							SLTIU(TEMP_3, TEMP_2, 0x400);         // m < 0x400 (scratchpad)?
+							label_slow_2 = (u32 *)recMem;
+							BEQZ(TEMP_3, 0);                     // hardware regs -> helper
+							LUI(TEMP_3, ADR_HI((uptr)psxH));     // <BD> psxH high half
+#endif
+#if QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY
+							LUI(TEMP_3, ADR_HI((uptr)psxH));
+#endif
+							ADDU(TEMP_3, TEMP_3, TEMP_2);         // psxH + m
+							LSU_OPCODE(0x8c000000, rt, TEMP_3, ADR_LO((uptr)psxH)); // LW rt, lo(psxH)(temp_3)
+							label_done = (u32 *)recMem;
+							B(0);                                // b done
+							NOP();                               // <BD>
+							fixup_branch(label_slow_1);
+							if (label_slow_2)
+								fixup_branch(label_slow_2);
+							/* As in the SW path, this is known 0x1f80xxxx
+							 * hardware, so avoid psxMemRead32's second region
+							 * dispatch and LUT lookup. */
+							JAL(psxHwRead32);                    // addr already in $a0
+							NOP();                               // <BD> (result not ready yet)
+							if (op_rt)
+								MOV(rt, MIPSREG_V0);
+							fixup_branch(label_done);
 						}
 						break;
 					case 0x88000000: // LWL

@@ -278,6 +278,20 @@ static void iJumpNormal(u32 bpc)
 
 	recDelaySlot();
 
+#if QPSX_MIPS_FOLD_DIRECT_JUMPS
+	/* A direct J (or a compile-time-resolved branch) has no architectural
+	 * work after its delay slot.  If its target is a short, not-yet-emitted
+	 * forward address, continue translation there instead of returning to the
+	 * indirect dispatcher.  Backward targets remain normal block exits, which
+	 * preserves the existing self-modifying-code and event-boundary behavior. */
+	if (direct_jump_fold_count < QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX &&
+	    bpc > pc && bpc - pc <= QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES) {
+		direct_jump_fold_count++;
+		pc = bpc;
+		return;
+	}
+#endif
+
 	// Can block use 'fastpath' return? (branches backward to its beginning)
 	const bool use_fastpath_return = rec_recompile_use_fastpath_return(bpc);
 

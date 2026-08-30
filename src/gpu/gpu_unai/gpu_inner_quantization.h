@@ -59,15 +59,12 @@ static void SetupDitheringConstants()
 // Where 'X' are fixed-pt bits, '0' is zero-padding, and '-' is don't care
 ////////////////////////////////////////////////////////////////////////////////
 template <int DITHER>
-GPU_INLINE u16 gpuColorQuantization24(u32 uSrc24, const u16 *pDst)
+GPU_INLINE u16 gpuColorQuantization24WithDither(u32 uSrc24, u32 dither)
 {
 	if (DITHER)
 	{
-		u16 fbpos  = (u32)(pDst - gpu_unai.vram);
-		u16 offset = ((fbpos & (0x7 << 10)) >> 7) | (fbpos & 0x7);
-
 		//clean overflow flags and add
-		uSrc24 = (uSrc24 & 0x1FF7FDFF) + gpu_unai.DitherMatrix[offset];
+		uSrc24 = (uSrc24 & 0x1FF7FDFF) + dither;
 
 		if (uSrc24 & (1<< 9)) uSrc24 |= (0x1FF    );
 		if (uSrc24 & (1<<19)) uSrc24 |= (0x1FF<<10);
@@ -77,6 +74,27 @@ GPU_INLINE u16 gpuColorQuantization24(u32 uSrc24, const u16 *pDst)
 	return ((uSrc24>> 4) & (0x1F    ))
 	     | ((uSrc24>> 9) & (0x1F<<5 ))
 	     | ((uSrc24>>14) & (0x1F<<10));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+template <int DITHER>
+GPU_INLINE u16 gpuColorQuantization24At(u32 uSrc24,
+							 const gpu_unai_t &gpu_state, u16 fbpos)
+{
+	if (DITHER)
+	{
+		u16 offset = ((fbpos & (0x7 << 10)) >> 7) | (fbpos & 0x7);
+		return gpuColorQuantization24WithDither<DITHER>(
+				uSrc24, gpu_state.DitherMatrix[offset]);
+	}
+	return gpuColorQuantization24WithDither<0>(uSrc24, 0);
+}
+
+template <int DITHER>
+GPU_INLINE u16 gpuColorQuantization24(u32 uSrc24, const u16 *pDst)
+{
+	return gpuColorQuantization24At<DITHER>(uSrc24, gpu_unai,
+							(u16)(u32)(pDst - gpu_unai.vram));
 }
 
 #endif //_OP_DITHER_H_

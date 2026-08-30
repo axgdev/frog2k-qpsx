@@ -24,6 +24,13 @@
 #include "psxcommon.h"
 #include "r3000a.h"
 
+#ifndef QPSX_GTE_INTPL_OPTIMIZE
+#define QPSX_GTE_INTPL_OPTIMIZE 0
+#endif
+#ifndef QPSX_GTE_INTPL_COMPACT
+#define QPSX_GTE_INTPL_COMPACT 0
+#endif
+
 void gteMFC2(void);
 void gteCFC2(void);
 void gteMTC2(void);
@@ -36,6 +43,16 @@ void gteOP(u32 gteop);
 void gteNCLIP(void);
 void gteDPCS(u32 gteop);
 void gteINTPL(u32 gteop);
+#if QPSX_GTE_INTPL_OPTIMIZE
+void gteINTPL_s0_l0(void);
+void gteINTPL_s0_l1(void);
+void gteINTPL_s1_l0(void);
+void gteINTPL_s1_l1(void);
+#endif
+#if QPSX_GTE_INTPL_COMPACT
+void gteINTPL_s0_compact(u32 gteop);
+void gteINTPL_s1_compact(u32 gteop);
+#endif
 void gteMVMVA(u32 gteop);
 void gteNCDS(void);
 void gteNCDT(void);
@@ -61,5 +78,15 @@ void gtecalcCTC2(u32 value, int reg);
 
 // v294: Update function pointer dispatch when ASM options change
 void gte_update_dispatch(void);
+
+/* Optional workload diagnostic.  Normal builds do not even export these
+ * symbols; the counter build reports once at shutdown. */
+#ifndef QPSX_GTE_OPCODE_COUNTER
+#define QPSX_GTE_OPCODE_COUNTER 0
+#endif
+#if QPSX_GTE_OPCODE_COUNTER
+void qpsx_gte_opcode_counter_reset(void);
+void qpsx_gte_opcode_counter_report(void);
+#endif
 
 #endif /* __GTE_H__ */

@@ -33,6 +33,8 @@
 #include "psxhw.h"
 #include "r3000a.h"
 #include "gte.h"
+#include "qpsx_build_config.h"
+#include "qpsx_phase_metrics.h"
 
 /* For direct HW I/O */
 #include "mdec.h"
@@ -74,6 +76,94 @@ extern "C" void xlog(const char *fmt, ...);
  *  which itself only has effect when HLE emulated BIOS is not in use.
  */
 #define USE_DIRECT_FASTPATH_BLOCK_RETURN_JUMPS
+
+#ifndef QPSX_MIPS_PSMEM_REG
+#define QPSX_MIPS_PSMEM_REG 0
+#endif
+/* On the NOMMU fallback, keep the PSX RAM base in $s7 and fold the 21-bit
+ * RAM mirror mask directly into the destination register.  The old sequence
+ * copied $s7 to the destination first, then masked into a temporary and added
+ * it, costing one extra emitted instruction for every converted base.  This
+ * is deliberately opt-in and keeps the old sequence as a defensive fallback
+ * if a caller violates the emitter's temporary-register contract. */
+#ifndef QPSX_MIPS_FAST_MEM_CONVERT
+#define QPSX_MIPS_FAST_MEM_CONVERT 0
+#endif
+/* Propagate the existing fuzzy PS1-address classification through ADDIU.
+ * 0 is off, 1 carries all region bits, and 2 carries only the RAM bit.  The
+ * RAM-only mode avoids turning address arithmetic on ROM/I/O pointers into
+ * helper-only loads/stores while retaining the range-check elision candidate. */
+#ifndef QPSX_MIPS_PROPAGATE_FUZZY_ADDR
+#define QPSX_MIPS_PROPAGATE_FUZZY_ADDR 0
+#endif
+/* Keep the indirect-return target in $ra across blocks that contain no C
+ * helper call.  The old loop reloaded the same stack value in every block's
+ * jump delay slot, even though the recompiler already restores $ra only when
+ * a generated block actually calls out.  This option removes that redundant
+ * D-cache load without consuming a guest register-cache slot. */
+#ifndef QPSX_MIPS_PERSISTENT_RETURN_RA
+#define QPSX_MIPS_PERSISTENT_RETURN_RA 0
+#endif
+
+/* On the Linux NOMMU path the small PC->host-code cache is direct-mapped and
+ * can miss in the tiny D-cache.  A MIPS load prefetch is safe on MIPS32r1 and
+ * lets the loop overlap that fill with its existing cycle/event loads.  Keep
+ * it opt-in: on a cache that already hits, the extra hint is pure overhead. */
+#ifndef QPSX_MIPS_DISPATCH_PREFETCH
+#define QPSX_MIPS_DISPATCH_PREFETCH 0
+#endif
+
+/* Keep the NOMMU dispatch-cache base in $gp for the lifetime of the inline
+ * dispatcher. Generated guest code never allocates $gp (guest registers use
+ * $s0-$s7), and the static-PIE C helpers preserve the ABI's callee-saved $gp.
+ * This removes one stack load per translated block without consuming a guest
+ * register-cache slot. Keep the stack-pointer path as the default. */
+#ifndef QPSX_MIPS_DISPATCH_CACHE_GP
+#define QPSX_MIPS_DISPATCH_CACHE_GP 0
+#endif
+#ifndef QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI
+#define QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI 0
+#endif
+#if QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI && !QPSX_MIPS_DISPATCH_CACHE_GP
+#error "QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI requires QPSX_MIPS_DISPATCH_CACHE_GP"
+#endif
+
+/* MIPS32r1 branch-likely instructions annul their delay slot when the
+ * common cache-hit condition is false.  The dispatch loop uses this to avoid
+ * issuing two otherwise-empty delay-slot instructions on every cache hit;
+ * keep it opt-in until the physical CPU confirms its branch timing. */
+#ifndef QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+#define QPSX_MIPS_DISPATCH_BRANCH_LIKELY 0
+#endif
+
+/* Frame completion is a separate branch from the two cache probes above.
+ * Keep its branch-likely form independently selectable: on a simple in-order
+ * MIPS32r1 core, annulling a delay slot can cost more than the single nop it
+ * replaces, while cache probes also move miss-only work out of the hit path.
+ * This split lets the physical benchmark answer that question without
+ * changing the cache-dispatch experiment. */
+#ifndef QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY
+#define QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY 0
+#endif
+
+
+/* Fold a bounded number of short, forward unconditional jumps into the
+ * current translated block.  This removes an indirect-dispatch round trip
+ * without changing the HLE return ABI or the NOMMU memory contract.  Keep it
+ * opt-in while measuring: larger superblocks consume more I-cache and delay
+ * the next cycle/event boundary. */
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS 0
+#endif
+#if QPSX_MIPS_FOLD_DIRECT_JUMPS
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX 2
+#endif
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES 256
+#endif
+static unsigned direct_jump_fold_count;
+#endif
 
 /* Const propagation is applied to addresses */
 #if defined(QPSX_ENABLE_MIPS_CONST_MEM) && QPSX_ENABLE_MIPS_CONST_MEM
@@ -144,11 +234,66 @@ static s8 *recRAM;
 static s8 *recROM;
 static uptr psxRecLUT[0x10000];
 
+#if defined(QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH) && \
+    QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH
+#ifndef QPSX_MIPS_DISPATCH_CACHE_ENTRIES
+#define QPSX_MIPS_DISPATCH_CACHE_ENTRIES 64
+#endif
+#if (QPSX_MIPS_DISPATCH_CACHE_ENTRIES < 1) || \
+    ((QPSX_MIPS_DISPATCH_CACHE_ENTRIES & \
+      (QPSX_MIPS_DISPATCH_CACHE_ENTRIES - 1)) != 0) || \
+    (QPSX_MIPS_DISPATCH_CACHE_ENTRIES > 2048)
+#error "QPSX_MIPS_DISPATCH_CACHE_ENTRIES must be a power of two <= 2048"
+#endif
+#define QPSX_MIPS_DISPATCH_CACHE_INDEX_MASK \
+	((QPSX_MIPS_DISPATCH_CACHE_ENTRIES - 1) * 4)
+/*
+ * The NOMMU Linux port cannot mirror recRAM into the guest address space, so
+ * every block dispatch otherwise reads both psxRecLUT and a widely scattered
+ * recRAM slot. Keep recent PC-to-host-code translations in a small direct-
+ * mapped cache. recClear() and recReset() invalidate it alongside the
+ * authoritative block-pointer arrays.
+ */
+struct rec_dispatch_entry {
+	u32 pc;
+	u32 code;
+};
+
+static struct rec_dispatch_entry rec_dispatch_cache[QPSX_MIPS_DISPATCH_CACHE_ENTRIES]
+	__attribute__((aligned(128)));
+
+static inline void rec_dispatch_cache_clear()
+{
+	memset(rec_dispatch_cache, 0, sizeof(rec_dispatch_cache));
+}
+#else
+static inline void rec_dispatch_cache_clear()
+{
+}
+#endif
+
 #undef PC_REC
 #undef PC_REC8
 #undef PC_REC16
 #undef PC_REC32
+#if defined(QPSX_LINUX_ALLOCATED_RAM) && QPSX_LINUX_ALLOCATED_RAM
+/*
+ * NOMMU cannot create the virtual recRAM mirrors used by the original fast
+ * path, but malloc() still gives recRAM and recROM exactly the same linear
+ * layout.  Fold RAM mirrors with a mask and select the BIOS array directly;
+ * this is equivalent to psxRecLUT without touching its 256 KiB table.
+ */
+static inline uptr rec_allocated_slot(u32 pc)
+{
+	if ((pc & 0xfff80000u) == 0xbfc00000u)
+		return (uptr)recROM + ((pc & 0x0007ffffu) * (REC_RAM_PTR_SIZE / 4));
+
+	return (uptr)recRAM + ((pc & 0x001fffffu) * (REC_RAM_PTR_SIZE / 4));
+}
+#define PC_REC(x)	rec_allocated_slot(x)
+#else
 #define PC_REC(x)	((uptr)psxRecLUT[(x) >> 16] + (((x) & 0xffff) * (REC_RAM_PTR_SIZE / 4)))
+#endif
 #define PC_REC8(x)	(*(u8 *)PC_REC(x))
 #define PC_REC16(x)	(*(u16*)PC_REC(x))
 #define PC_REC32(x)	(*(u32*)PC_REC(x))
@@ -221,7 +366,15 @@ static inline bool IsFuzzyScratchpadAddr(const u32 reg)  { return iRegs[reg].is_
 #define RECMEM_SIZE         (12 * 1024 * 1024)
 #endif
 #define RECMEM_SIZE_MAX     (RECMEM_SIZE-(256*1024))
-static u8 recMemBase[RECMEM_SIZE] __attribute__((aligned(4)));
+#ifndef QPSX_RECMEM_ALIGNMENT
+#define QPSX_RECMEM_ALIGNMENT 4
+#endif
+/* The generated stream is instruction-cache hot and the HC15xx has
+ * 16-byte lines.  Keep the historical 4-byte default for compatibility, but
+ * allow physical A/B builds to shift the entire stream by a cache-line
+ * boundary without changing generated instructions or audio/video behavior. */
+static u8 recMemBase[RECMEM_SIZE]
+	__attribute__((aligned(QPSX_RECMEM_ALIGNMENT)));
 
 u32        *recMem;                /* Where does next emitted opcode in block go? */
 static u32 *recMemStart;           /* Where did first emitted opcode in block go? */
@@ -252,6 +405,16 @@ static bool lsu_tmp_cache_valid;           /* LSU vals are cached in $at,$v1. Se
 static bool host_v0_reg_is_const;          /* PCs are cached in $v0. See rec_bcu.cpp.h */
 static u32  host_v0_reg_constval;
 static bool host_ra_reg_has_block_retaddr; /* Indirect-return address is cached in $ra. */
+
+#if QPSX_RUNTIME_TELEMETRY
+/* Compile-time counters only.  Keeping these off the ExecuteBlock path makes
+ * the production diagnostic observable without turning the old profiler back
+ * on (the profiler adds a measurable cost to every translated instruction). */
+static unsigned rec_telemetry_blocks;
+static unsigned rec_telemetry_bytes;
+static unsigned rec_telemetry_folds;
+static unsigned rec_telemetry_resets;
+#endif
 
 
 #ifdef WITH_DISASM
@@ -484,6 +647,10 @@ static void recRecompile()
 
 	regReset();
 
+#if QPSX_MIPS_FOLD_DIRECT_JUMPS
+	direct_jump_fold_count = 0;
+#endif
+
 	PC_REC32(psxRegs.pc) = (u32)recMem;
 	oldpc = pc = psxRegs.pc;
 
@@ -560,6 +727,14 @@ static void recRecompile()
 
 	DISASM_HOST();
 	clear_insn_cache(recMemStart, recMem, 0);
+
+#if QPSX_RUNTIME_TELEMETRY
+	rec_telemetry_blocks++;
+	rec_telemetry_bytes += (unsigned)((u8 *)recMem - (u8 *)recMemStart);
+#if QPSX_MIPS_FOLD_DIRECT_JUMPS
+	rec_telemetry_folds += direct_jump_fold_count;
+#endif
+#endif
 }
 
 
@@ -568,6 +743,13 @@ static int recInit()
 	REC_LOG("Initializing\n");
 
 	recMem = (u32*)recMemBase;
+
+#if QPSX_RUNTIME_TELEMETRY
+	rec_telemetry_blocks = 0;
+	rec_telemetry_bytes = 0;
+	rec_telemetry_folds = 0;
+	rec_telemetry_resets = 0;
+#endif
 
 	// Init code buffer, to allocate the RAM we need in advance. Filling with
 	//  all-1's should force an exception on any accidental non-code execution.
@@ -679,6 +861,9 @@ __attribute__((noinline)) static void recFunc(void *fn)
 	__asm__ __volatile__ (
 		"addiu  $sp, $sp, -24                   \n"
 		"la     $fp, %[psxRegs]                 \n" // $fp = &psxRegs
+#if QPSX_MIPS_PSMEM_REG
+		"lw     $s7, 0(%[psxM_ptr])             \n" // $s7 = psxM base
+#endif
 		"lw     $v0, %[psxRegs_pc_off]($fp)     \n" // Blocks expect $v0 to contain PC val on entry
 		"la     $ra, block_return_addr%=        \n" // Load $ra with block_return_addr
 		"sw     $ra, 16($sp)                    \n" // Put 'block_return_addr' on stack
@@ -694,6 +879,9 @@ __attribute__((noinline)) static void recFunc(void *fn)
 		: // Input
 		  [fn]                   "r" (fn),
 		  [psxRegs]              "i" (&psxRegs),
+#if QPSX_MIPS_PSMEM_REG
+		  [psxM_ptr]             "d" (&psxM),
+#endif
 		  [psxRegs_pc_off]       "i" (off(pc)),   // Offset of psxRegs.pc in psxRegs
 		  [psxRegs_cycle_off]    "i" (off(cycle)) // Offset of psxRegs.cycle in psxRegs
 		: // Clobber - No need to list anything but 'saved' regs
@@ -705,13 +893,13 @@ __attribute__((noinline)) static void recFunc(void *fn)
 
 /* Execute blocks starting at psxRegs.pc
  * Blocks return indirectly, to address stored at 16($sp)
- * Block pointers are looked up using psxRecLUT[].
+ * Block pointers are cached, then addressed directly in allocated recRAM.
  * Called only from recExecute(), see notes there.
  *
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) void recExecute_indirect_return_lut()
+QPSX_HOT_REC __attribute__((noinline)) void recExecute_indirect_return_lut()
 {
 	// Set block_ret_addr to 0, so generated code uses indirect returns
 	block_ret_addr = block_fast_ret_addr = 0;
@@ -749,27 +937,45 @@ __asm__ __volatile__ (
 
 // $fp/$s8 remains set to &psxRegs across all calls to blocks
 "move  $fp, %[psxRegs]                        \n"
+#if QPSX_MIPS_PSMEM_REG
+"lw    $s7, 0(%[psxM_ptr])                    \n" // $s7 = psxM base
+#endif
 
 // Set up our own stack frame. Should have 8-byte alignment, and have 16 bytes
 // empty at 0($sp) for use by functions called from within recompiled code.
-".equ  frame_size,                  48        \n"
+".equ  frame_size,                  56        \n"
 ".equ  f_off_temp_var1,             20        \n"
 ".equ  f_off_block_ret_addr,        16        \n" // NOTE: blocks assume this is at 16($sp)!
 ".equ  f_off_recRecompile,           24        \n"
 ".equ  f_off_psxBranchTest,          28        \n"
 ".equ  f_off_frame_complete,         32        \n"
-".equ  f_off_psxRecLUT,              36        \n"
+".equ  f_off_recRAM,                 36        \n"
+".equ  f_off_recROM,                 40        \n"
+".equ  f_off_dispatch_cache,         44        \n"
+".equ  f_off_temp_cache_entry,       48        \n"
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+".equ  f_off_saved_gp,               52        \n"
+#endif
 "addiu $sp, $sp, -frame_size                  \n"
 "sw    %[recRecompile], f_off_recRecompile($sp) \n"
 "sw    %[psxBranchTest], f_off_psxBranchTest($sp) \n"
 "sw    %[emu_frame_complete], f_off_frame_complete($sp) \n"
-"sw    %[psxRecLUT], f_off_psxRecLUT($sp)     \n"
+"sw    %[recRAM], f_off_recRAM($sp)           \n"
+"sw    %[recROM], f_off_recROM($sp)           \n"
+"sw    %[dispatch_cache], f_off_dispatch_cache($sp) \n"
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"sw    $gp, f_off_saved_gp($sp)               \n"
+"lw    $gp, f_off_dispatch_cache($sp)         \n"
+#endif
 
 // Derive the local return address without an absolute text relocation.
 "bal   setup_return%=                         \n"
 "nop                                           \n"
 "setup_return%=:                              \n"
 "addiu $t0, $ra, loop%=-setup_return%=        \n"
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"move  $ra, $t0                                \n" // keep return target until a C call clobbers it
+#endif
 "sw    $t0, f_off_block_ret_addr($sp)         \n"
 
 // Load $v0 once with psxRegs.pc, blocks will assign new value when returning
@@ -794,8 +1000,7 @@ __asm__ __volatile__ (
 // The loop pseudocode is this, interleaving ops to reduce load stalls:
 //
 // loop:
-// $t2 = psxRecLUT[pxsRegs.pc >> 16] + (psxRegs.pc & 0xffff)
-// $t0 = *($t2)
+// $t0 = cached host code for psxRegs.pc, falling back to direct recRAM/recROM
 // psxRegs.cycle += $v1
 // if (psxRegs.cycle >= psxRegs.io_cycle_counter)
 //    goto call_psxBranchTest;
@@ -810,20 +1015,36 @@ __asm__ __volatile__ (
 // Infinite loop, blocks return here
 "loop%=:                                      \n"
 "lw    $t3, %[psxRegs_cycle_off]($fp)         \n" // $t3 = psxRegs.cycle
-"srl   $t2, $v0, 16                           \n"
-"sll   $t2, $t2, 2                            \n" // sizeof() psxRecLUT[] elements is 4
-"lw    $t1, f_off_psxRecLUT($sp)              \n"
-"addu  $t1, $t1, $t2                          \n"
-"lw    $t1, 0($t1)                            \n" // $t1 = psxRecLUT[psxRegs.pc >> 16]
+"andi  $t2, $v0, %[dispatch_index_mask]       \n" // cache index
+"sll   $t2, $t2, 1                            \n" // eight bytes per entry
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"addu  $t6, $gp, $t2                          \n" // $t6 = cache entry
+#else
+"lw    $t1, f_off_dispatch_cache($sp)         \n"
+"addu  $t6, $t1, $t2                          \n" // $t6 = cache entry
+#endif
+#if QPSX_MIPS_DISPATCH_PREFETCH
+"pref  0, 0($t6)                              \n" // overlap cache fill with cycle loads
+#endif
+"lw    $t5, 0($t6)                            \n" // cached guest PC
+"lw    $t0, 4($t6)                            \n" // cached host code
 "lw    $t4, %[psxRegs_io_cycle_ctr_off]($fp)  \n" // $t4 = psxRegs.io_cycle_counter
 "addu  $t3, $t3, $v1                          \n" // $t3 = psxRegs.cycle + $v1
-"andi  $t0, $v0, 0xffff                       \n"
-"addu  $t2, $t0, $t1                          \n"
-"lw    $t0, 0($t2)                            \n" // $t0 = address of start of block code, or
-                                                  //       or 0 if block needs recompilation
-                                                  // IMPORTANT: leave block ptr in $t2, it gets
-                                                  // saved & re-used if recRecompile() is called.
+#if QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+/* The miss path needs t1 = (pc << 4).  Compute it in the taken delay slot;
+ * on a hit both branch-likely delay slots are annulled. */
+"bnel  $t5, $v0, dispatch_cache_miss%=        \n"
+"sll   $t1, $v0, 4                            \n"
+"beqzl $t0, dispatch_cache_miss%=             \n"
+"sll   $t1, $v0, 4                            \n"
+#else
+"bne   $t5, $v0, dispatch_cache_miss%=        \n"
+"nop                                           \n"
+"beqz  $t0, dispatch_cache_miss%=             \n"
+"nop                                           \n"
+#endif
 
+"dispatch_cache_ready%=:                      \n"
 
 // Must call psxBranchTest() when psxRegs.cycle >= psxRegs.io_cycle_counter
 "sltu  $t4, $t3, $t4                          \n"
@@ -838,7 +1059,39 @@ __asm__ __volatile__ (
 // Execute already-compiled block. It will return at top of loop.
 "execute_block%=:                             \n"
 "jr    $t0                                    \n"
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"nop                                           \n" // $ra already holds the loop target
+#else
 "lw    $ra, 16($sp)                           \n" // <BD> Load block return address
+#endif
+
+// Cache miss: derive the authoritative recRAM/recROM slot arithmetically.
+// Valid RAM PCs have bit 27 clear; the 0xbfc00000 BIOS region has it set.
+// Shift pairs mask to the 2 MiB RAM or 512 KiB ROM allocation respectively.
+"dispatch_cache_miss%=:                       \n"
+#if !QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+"sll   $t1, $v0, 4                            \n"
+#endif
+"bltz  $t1, dispatch_cache_miss_rom%=         \n"
+"sll   $t2, $v0, 11                           \n" // <BD> discard bits above RAM offset
+"srl   $t2, $t2, 11                           \n" // $t2 = pc & 0x001fffff
+"lw    $t1, f_off_recRAM($sp)                 \n"
+"b     dispatch_cache_slot_ready%=            \n"
+"addu  $t2, $t2, $t1                          \n" // <BD> $t2 = &recRAM[pc & 0x1fffff]
+"dispatch_cache_miss_rom%=:                   \n"
+"sll   $t2, $v0, 13                           \n"
+"srl   $t2, $t2, 13                           \n" // $t2 = pc & 0x0007ffff
+"lw    $t1, f_off_recROM($sp)                 \n"
+"addu  $t2, $t2, $t1                          \n" // $t2 = &recROM[pc & 0x7ffff]
+"dispatch_cache_slot_ready%=:                 \n"
+"lw    $t0, 0($t2)                            \n" // $t0 = address of start of block code, or
+                                                  //       or 0 if block needs recompilation
+                                                  // IMPORTANT: leave block ptr in $t2, it gets
+                                                  // saved & re-used if recRecompile() is called.
+"sw    $v0, 0($t6)                            \n"
+"sw    $t0, 4($t6)                            \n"
+"b     dispatch_cache_ready%=                 \n"
+"nop                                           \n"
 
 ////////////////////////////
 //     NON-LOOP CODE:     //
@@ -850,10 +1103,20 @@ __asm__ __volatile__ (
 "jalr  $t9                                    \n"
 "sw    $v0, %[psxRegs_pc_off]($fp)            \n" // <BD> Use BD slot to store new psxRegs.pc val,
                                                   //  as psxBranchTest() might issue an exception.
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"lw    $ra, f_off_block_ret_addr($sp)          \n" // psxBranchTest clobbered $ra
+#endif
+#if QPSX_MIPS_DISPATCH_CACHE_GP && !QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI
+"lw    $gp, f_off_dispatch_cache($sp)          \n" // Defensive reload across helper calls
+#endif
 // QPSX_039: Check emu_frame_complete flag - exit if frame is done
 "lw    $t5, f_off_frame_complete($sp)         \n"
 "lw    $t6, 0($t5)                            \n"
+#if QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY
+"bnezl $t6, exit%=                            \n" // Annul the common not-taken delay slot
+#else
 "bnez  $t6, exit%=                            \n" // Exit loop if frame complete
+#endif
 "nop                                          \n"
 "lw    $v0, %[psxRegs_pc_off]($fp)            \n" // After psxBranchTest() returns, load psxRegs.pc
                                                   //  back into $v0, which could be different than
@@ -865,27 +1128,46 @@ __asm__ __volatile__ (
 // Recompile block and return to normal codepath.
 "recompile_block%=:                           \n"
 "lw    $t9, f_off_recRecompile($sp)           \n"
+"sw    $t6, f_off_temp_cache_entry($sp)       \n"
 "jalr  $t9                                    \n"
 "sw    $t2, f_off_temp_var1($sp)              \n" // <BD> Save block ptr across call
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"lw    $ra, f_off_block_ret_addr($sp)          \n" // recRecompile clobbered $ra
+#endif
+#if QPSX_MIPS_DISPATCH_CACHE_GP && !QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI
+"lw    $gp, f_off_dispatch_cache($sp)          \n" // Defensive reload across helper calls
+#endif
 "lw    $t2, f_off_temp_var1($sp)              \n" // Restore block ptr upon return
+"lw    $t6, f_off_temp_cache_entry($sp)       \n"
 "lw    $v0, %[psxRegs_pc_off]($fp)            \n" // Blocks expect $v0 to contain PC val on entry
+"lw    $t0, 0($t2)                            \n"
+"sw    $v0, 0($t6)                            \n"
 "b     execute_block%=                        \n" // Resume normal code path, but first we must..
-"lw    $t0, 0($t2)                            \n" // <BD> ..load $t0 with ptr to block code
+"sw    $t0, 4($t6)                            \n" // <BD> ..publish compiled code in cache
 
 // QPSX_039: Exit point - frame complete, return to libretro
 "exit%=:                                      \n"
+#if QPSX_MIPS_DISPATCH_CACHE_GP
+"lw    $gp, f_off_saved_gp($sp)                \n"
+#endif
 "addiu $sp, $sp, frame_size                   \n"
 ".set pop                                     \n"
 
 : // Output
 : // Input
   [psxRegs]                    "d" (&psxRegs),
+#if QPSX_MIPS_PSMEM_REG
+  [psxM_ptr]                   "d" (&psxM),
+#endif
   [psxRegs_pc_off]             "i" (off(pc)),
   [psxRegs_cycle_off]          "i" (off(cycle)),
   [psxRegs_io_cycle_ctr_off]   "i" (off(io_cycle_counter)),
   [recRecompile]               "d" (&recRecompile),
   [psxBranchTest]              "d" (&psxBranchTest),
-  [psxRecLUT]                  "d" (psxRecLUT),
+  [recRAM]                     "d" (recRAM),
+  [recROM]                     "d" (recROM),
+  [dispatch_cache]             "d" (rec_dispatch_cache),
+  [dispatch_index_mask]        "i" (QPSX_MIPS_DISPATCH_CACHE_INDEX_MASK),
   [emu_frame_complete]         "d" (&emu_frame_complete)
 : // Clobber - No need to list anything but 'saved' regs
   "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "fp", "ra", "memory"
@@ -902,7 +1184,7 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecute_indirect_return_mmap()
+QPSX_HOT_REC __attribute__((noinline)) static void recExecute_indirect_return_mmap()
 {
 	// Set block_ret_addr to 0, so generated code uses indirect returns
 	block_ret_addr = block_fast_ret_addr = 0;
@@ -949,6 +1231,9 @@ __asm__ __volatile__ (
 
 // Store const block return address at fixed location in stack frame
 "la    $t0, loop%=                            \n"
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"move  $ra, $t0                                \n" // keep return target until a C call clobbers it
+#endif
 "sw    $t0, f_off_block_ret_addr($sp)         \n"
 
 // Load $v0 once with psxRegs.pc, blocks will assign new value when returning
@@ -994,7 +1279,7 @@ __asm__ __volatile__ (
 // The block ptrs are mapped virtually to address space allowing lower
 //  24 bits of PS1 PC address to lookup start of any RAM or ROM code block.
 "lui   $t2, %[REC_RAM_VADDR_UPPER]            \n"
-#ifdef HAVE_MIPS32R2_EXT_INS
+#if defined(HAVE_MIPS32R2_EXT_INS) && defined(QPSX_ENABLE_MIPS32R2) && QPSX_ENABLE_MIPS32R2
 "ins   $t2, $v0, 0, 24                        \n"
 #else
 "sll   $t1, $v0, 8                            \n"
@@ -1021,7 +1306,11 @@ __asm__ __volatile__ (
 // Execute already-compiled block. It will return at top of loop.
 "execute_block%=:                             \n"
 "jr    $t0                                    \n"
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"nop                                           \n" // $ra already holds the loop target
+#else
 "lw    $ra, 16($sp)                           \n" // <BD> Load block return address
+#endif
 
 ////////////////////////////
 //     NON-LOOP CODE:     //
@@ -1032,6 +1321,9 @@ __asm__ __volatile__ (
 "jal   %[psxBranchTest]                       \n"
 "sw    $v0, %[psxRegs_pc_off]($fp)            \n" // <BD> Use BD slot to store new psxRegs.pc val,
                                                   //  as psxBranchTest() might issue an exception.
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"lw    $ra, f_off_block_ret_addr($sp)          \n" // psxBranchTest clobbered $ra
+#endif
 // QPSX_039: Check emu_frame_complete flag - exit if frame is done
 "lui   $t5, %%hi(%[emu_frame_complete])       \n"
 "lw    $t6, %%lo(%[emu_frame_complete])($t5)  \n"
@@ -1048,6 +1340,9 @@ __asm__ __volatile__ (
 "recompile_block%=:                           \n"
 "jal   %[recRecompile]                        \n"
 "sw    $t2, f_off_temp_var1($sp)              \n" // <BD> Save block ptr across call
+#if QPSX_MIPS_PERSISTENT_RETURN_RA
+"lw    $ra, f_off_block_ret_addr($sp)          \n" // recRecompile clobbered $ra
+#endif
 "lw    $t2, f_off_temp_var1($sp)              \n" // Restore block ptr upon return
 "lw    $v0, %[psxRegs_pc_off]($fp)            \n" // Blocks expect $v0 to contain PC val on entry
 "b     execute_block%=                        \n" // Resume normal code path, but first we must..
@@ -1083,7 +1378,7 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecute_direct_return_lut()
+QPSX_HOT_REC __attribute__((noinline)) static void recExecute_direct_return_lut()
 {
 __asm__ __volatile__ (
 // NOTE: <BD> indicates an instruction in a branch-delay slot
@@ -1301,7 +1596,7 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecute_direct_return_mmap()
+QPSX_HOT_REC __attribute__((noinline)) static void recExecute_direct_return_mmap()
 {
 __asm__ __volatile__ (
 // NOTE: <BD> indicates an instruction in a branch-delay slot
@@ -1381,7 +1676,7 @@ __asm__ __volatile__ (
 // The block ptrs are mapped virtually to address space allowing lower
 //  24 bits of PS1 PC address to lookup start of any RAM or ROM code block.
 "lui   $t2, %[REC_RAM_VADDR_UPPER]            \n"
-#ifdef HAVE_MIPS32R2_EXT_INS
+#if defined(HAVE_MIPS32R2_EXT_INS) && defined(QPSX_ENABLE_MIPS32R2) && QPSX_ENABLE_MIPS32R2
 "ins   $t2, $v0, 0, 24                        \n"
 #else
 "sll   $t1, $v0, 8                            \n"
@@ -1521,12 +1816,147 @@ __asm__ __volatile__ (
  * IMPORTANT: Functions containing inline ASM should have attribute 'noinline'.
  *            Crashes at callsites can occur otherwise, at least with GCC 4.xx.
  */
-__attribute__((noinline)) static void recExecuteBlock(unsigned target_pc)
+QPSX_HOT_REC __attribute__((noinline)) static void recExecuteBlock(unsigned target_pc)
 {
 	// Set block_ret_addr to 0, so generated code uses indirect returns
 	block_ret_addr = block_fast_ret_addr = 0;
 
-#ifndef ASM_EXECUTE_LOOP
+#if defined(QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH) && \
+    QPSX_ENABLE_MIPS_PIC_ASM_DISPATCH
+	/*
+	 * HLE softcalls may nest this dispatcher inside recExecute(), so blocks
+	 * must still return through the address at 16($sp).  Keep that property,
+	 * but save the ABI register set once per softcall instead of entering the
+	 * recFunc() trampoline for every guest block.
+	 */
+	__asm__ __volatile__ (
+		".set push                                      \n"
+		".set noreorder                                 \n"
+
+		".equ  block_frame_size,              48        \n"
+		".equ  block_off_return,              16        \n"
+		".equ  block_off_target_pc,           20        \n"
+		".equ  block_off_temp_slot,           24        \n"
+		".equ  block_off_recRecompile,        28        \n"
+		".equ  block_off_psxBranchTest,       32        \n"
+		".equ  block_off_recRAM,              36        \n"
+		".equ  block_off_recROM,              40        \n"
+		"addiu $sp, $sp, -block_frame_size              \n"
+		"sw    %[target_pc], block_off_target_pc($sp)   \n"
+		"sw    %[recRecompile], block_off_recRecompile($sp) \n"
+		"sw    %[psxBranchTest], block_off_psxBranchTest($sp) \n"
+		"sw    %[recRAM], block_off_recRAM($sp)         \n"
+		"sw    %[recROM], block_off_recROM($sp)         \n"
+		"move  $fp, %[psxRegs]                          \n"
+#if QPSX_MIPS_PSMEM_REG
+		"lw    $s7, 0(%[psxM_ptr])                      \n" // $s7 = psxM base
+#endif
+
+		// Derive the nested dispatcher's return address without a text relocation.
+		"bal   block_setup_return%=                     \n"
+		"nop                                             \n"
+		"block_setup_return%=:                          \n"
+		"addiu $t0, $ra, block_return%=-block_setup_return%= \n"
+		#if QPSX_MIPS_PERSISTENT_RETURN_RA
+		"move  $ra, $t0                                  \n" // keep return target until a C call clobbers it
+		#endif
+		"sw    $t0, block_off_return($sp)               \n"
+
+		// A C do/while executes the initial PC before testing target_pc.
+		"lw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"b     block_lookup%=                           \n"
+		"move  $v1, $0                                  \n"
+
+		// Generated blocks return here with the next PC in $v0 and cycles in $v1.
+		".balign 32                                     \n"
+		"block_return%=:                                \n"
+		"lw    $t3, %[psxRegs_cycle_off]($fp)           \n"
+		"lw    $t4, %[psxRegs_io_cycle_ctr_off]($fp)    \n"
+		"addu  $t3, $t3, $v1                            \n"
+		"sltu  $t4, $t3, $t4                            \n"
+		"beqz  $t4, block_branch_test%=                 \n"
+		"sw    $t3, %[psxRegs_cycle_off]($fp)           \n"
+		"sw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"lw    $t5, block_off_target_pc($sp)            \n"
+		"beq   $v0, $t5, block_exit%=                   \n"
+		"nop                                             \n"
+		"b     block_lookup%=                           \n"
+		"move  $v1, $0                                  \n"
+
+		// Preserve the C path's target_pc==0 rule: return after the first IRQ test.
+		"block_branch_test%=:                           \n"
+		"sw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"lw    $t9, block_off_psxBranchTest($sp)        \n"
+		"jalr  $t9                                      \n"
+		"nop                                             \n"
+		#if QPSX_MIPS_PERSISTENT_RETURN_RA
+		"lw    $ra, block_off_return($sp)               \n" // psxBranchTest clobbered $ra
+		#endif
+		"lw    $t5, block_off_target_pc($sp)            \n"
+		"beqz  $t5, block_exit%=                        \n"
+		"lw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"bne   $v0, $t5, block_lookup%=                 \n"
+		"move  $v1, $0                                  \n"
+		"b     block_exit%=                             \n"
+		"nop                                             \n"
+
+		// Fold the guest RAM mirrors or select the BIOS block-pointer allocation.
+		"block_lookup%=:                                \n"
+		"sll   $t1, $v0, 4                              \n"
+		"bltz  $t1, block_lookup_rom%=                  \n"
+		"sll   $t2, $v0, 11                             \n"
+		"srl   $t2, $t2, 11                             \n"
+		"lw    $t1, block_off_recRAM($sp)               \n"
+		"b     block_slot_ready%=                       \n"
+		"addu  $t2, $t2, $t1                            \n"
+		"block_lookup_rom%=:                            \n"
+		"sll   $t2, $v0, 13                             \n"
+		"srl   $t2, $t2, 13                             \n"
+		"lw    $t1, block_off_recROM($sp)               \n"
+		"addu  $t2, $t2, $t1                            \n"
+		"block_slot_ready%=:                            \n"
+		"lw    $t0, 0($t2)                              \n"
+		"beqz  $t0, block_recompile%=                   \n"
+		"nop                                             \n"
+		"block_execute%=:                               \n"
+		"jr    $t0                                      \n"
+		#if QPSX_MIPS_PERSISTENT_RETURN_RA
+		"nop                                             \n" // $ra already holds the nested return target
+		#else
+		"lw    $ra, block_off_return($sp)               \n"
+		#endif
+
+		"block_recompile%=:                             \n"
+		"lw    $t9, block_off_recRecompile($sp)         \n"
+		"jalr  $t9                                      \n"
+		"sw    $t2, block_off_temp_slot($sp)            \n"
+		#if QPSX_MIPS_PERSISTENT_RETURN_RA
+		"lw    $ra, block_off_return($sp)               \n" // recRecompile clobbered $ra
+		#endif
+		"lw    $t2, block_off_temp_slot($sp)            \n"
+		"lw    $v0, %[psxRegs_pc_off]($fp)              \n"
+		"b     block_execute%=                          \n"
+		"lw    $t0, 0($t2)                              \n"
+
+		"block_exit%=:                                  \n"
+		"addiu $sp, $sp, block_frame_size               \n"
+		".set pop                                       \n"
+		:
+		: [target_pc]                "d" (target_pc),
+		  [psxRegs]                  "d" (&psxRegs),
+#if QPSX_MIPS_PSMEM_REG
+		  [psxM_ptr]                 "d" (&psxM),
+#endif
+		  [psxRegs_pc_off]           "i" (off(pc)),
+		  [psxRegs_cycle_off]        "i" (off(cycle)),
+		  [psxRegs_io_cycle_ctr_off] "i" (off(io_cycle_counter)),
+		  [recRecompile]             "d" (&recRecompile),
+		  [psxBranchTest]            "d" (&psxBranchTest),
+		  [recRAM]                   "d" (recRAM),
+		  [recROM]                   "d" (recROM)
+		: "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "fp", "ra", "memory"
+	);
+#elif !defined(ASM_EXECUTE_LOOP)
 	static unsigned int block_count = 0;
 	static unsigned int last_pc = 0;
 	static unsigned int branch_test_count = 0;
@@ -1718,6 +2148,7 @@ __asm__ __volatile__ (
 
 static void recExecute()
 {
+	QPSX_PHASE_REC();
 	// QPSX_039: Only reset code cache on first call
 	// Prevents slow frame execution caused by clearing cache every frame
 	static bool rec_initialized = false;
@@ -1793,6 +2224,7 @@ extern "C" void recClear(u32 Addr, u32 Size)
 	if (has_code) {
 		void *dst = (void*)(dst_base + (masked_ram_addr * REC_RAM_PTR_SIZE/4));
 		memset(dst, 0, Size*REC_RAM_PTR_SIZE);
+		rec_dispatch_cache_clear();
 	}
 }
 
@@ -1868,7 +2300,11 @@ void recNotify(int note, void *data __attribute__((unused)))
 
 static void recReset()
 {
+#if QPSX_RUNTIME_TELEMETRY
+	rec_telemetry_resets++;
+#endif
 	memset(code_pages, 0, sizeof(code_pages));
+	rec_dispatch_cache_clear();
 	memset(recRAM, 0, REC_RAM_SIZE);
 	memset(recROM, 0, REC_ROM_SIZE);
 
@@ -1879,6 +2315,17 @@ static void recReset()
 	// Set default recompilation options and any per-game options
 	rec_set_options();
 }
+
+#if QPSX_RUNTIME_TELEMETRY
+extern "C" void recLogTelemetry(void)
+{
+	const unsigned cache_used = (unsigned)((u8 *)recMem - recMemBase);
+	xlog("QPSX: rec telemetry blocks=%u code_bytes=%u folds=%u "
+	     "cache_used=%u cache_resets=%u",
+	     rec_telemetry_blocks, rec_telemetry_bytes, rec_telemetry_folds,
+	     cache_used, rec_telemetry_resets);
+}
+#endif
 
 
 R3000Acpu psxRec =

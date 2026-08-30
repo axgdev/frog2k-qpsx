@@ -30,8 +30,38 @@ unsigned short *SCREEN = static_screen_buffer;
 
 extern retro_video_refresh_t video_cb;
 extern retro_audio_sample_batch_t audio_batch_cb;
+extern retro_environment_t environ_cb;
 
 extern volatile int skip_video_output;
+
+/* Linux's static frontend exports this optional zero-copy presenter.  The
+ * weak reference keeps the ordinary libretro port usable on UniFrog and on
+ * host builds where no GE presenter exists. */
+extern "C" void sf2000_video_vram(const void *data, unsigned width,
+                                  unsigned height, size_t pitch)
+    __attribute__((weak));
+extern "C" void sf2000_video_vram_fps(const void *data, unsigned width,
+                                       unsigned height, size_t pitch,
+                                       const void *left, unsigned left_width,
+                                       unsigned left_height, size_t left_pitch,
+                                       const void *right,
+                                       unsigned right_width,
+                                       unsigned right_height,
+                                       size_t right_pitch)
+    __attribute__((weak));
+
+/* The core owns these tiny diagnostic strips.  Keeping the query weak lets
+ * the standalone/UniFrog port retain the ordinary raw path when the Linux
+ * GE overlay entry point is not linked. */
+extern "C" int qpsx_get_fps_overlays(const uint16_t **left,
+                                     unsigned *left_width,
+                                     unsigned *left_height,
+                                     size_t *left_pitch,
+                                     const uint16_t **right,
+                                     unsigned *right_width,
+                                     unsigned *right_height,
+                                     size_t *right_pitch)
+    __attribute__((weak));
 
 /* v295: GPU frame counter - counts ACTUAL rendered frames (not skipped/duped) */
 volatile int gpu_frame_count = 0;
@@ -87,7 +117,28 @@ unsigned short pad_read(int num)
     return val;
 }
 
-void video_flip(void)
+unsigned short *video_acquire_framebuffer(void)
+{
+    struct retro_framebuffer framebuffer;
+
+    if (!environ_cb)
+        return SCREEN;
+
+    memset(&framebuffer, 0, sizeof(framebuffer));
+    framebuffer.width = SCREEN_WIDTH;
+    framebuffer.height = SCREEN_HEIGHT;
+    framebuffer.access_flags = RETRO_MEMORY_ACCESS_WRITE;
+    if (!environ_cb(RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER,
+                    &framebuffer) ||
+        !framebuffer.data ||
+        framebuffer.format != RETRO_PIXEL_FORMAT_RGB565 ||
+        framebuffer.pitch != SCREEN_WIDTH * sizeof(uint16_t))
+        return SCREEN;
+
+    return (unsigned short *)framebuffer.data;
+}
+
+void video_flip_framebuffer(const unsigned short *buffer)
 {
     if (!video_cb) return;
 
@@ -99,11 +150,51 @@ void video_flip(void)
      */
     if (skip_video_output) {
         video_cb(NULL, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
-    } else if (SCREEN) {
+    } else if (buffer) {
         /* v295: Count ACTUAL rendered frames (not skipped) */
         gpu_frame_count++;
-        video_cb(SCREEN, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
+        video_cb(buffer, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * 2);
     }
+}
+
+int video_flip_vram(const unsigned short *buffer, unsigned width,
+                    unsigned height, size_t pitch)
+{
+    const uint16_t *left = NULL;
+    const uint16_t *right = NULL;
+    unsigned left_width = 0;
+    unsigned left_height = 0;
+    size_t left_pitch = 0;
+    unsigned right_width = 0;
+    unsigned right_height = 0;
+    size_t right_pitch = 0;
+
+    if (!sf2000_video_vram || !buffer || !width || !height)
+        return 0;
+    if (skip_video_output) {
+        /* Keep libretro's frame-duplication accounting and pacing semantics;
+         * the frontend has no source surface to submit for this frame. */
+        if (video_cb)
+            video_cb(NULL, width, height, pitch);
+        return 1;
+    }
+    gpu_frame_count++;
+    if (sf2000_video_vram_fps && qpsx_get_fps_overlays &&
+        qpsx_get_fps_overlays(&left, &left_width, &left_height,
+                              &left_pitch, &right, &right_width,
+                              &right_height, &right_pitch)) {
+        sf2000_video_vram_fps(buffer, width, height, pitch,
+                              left, left_width, left_height, left_pitch,
+                              right, right_width, right_height, right_pitch);
+    } else {
+        sf2000_video_vram(buffer, width, height, pitch);
+    }
+    return 1;
+}
+
+void video_flip(void)
+{
+    video_flip_framebuffer(SCREEN);
 }
 
 void video_clear(void) { memset(SCREEN, 0, SCREEN_WIDTH * SCREEN_HEIGHT * 2); }

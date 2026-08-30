@@ -27,9 +27,12 @@
 /*
  * v368: PROFILER MASTER SWITCH
  * Set to 1 to enable profiling (adds overhead to every mem access)
- * Set to 0 for production builds (zero overhead)
+ * Set to 0 for production builds (zero overhead). The frontend build
+ * overrides this with -DQPSX_PROFILER_ENABLED=0 for the production core.
  */
-#define QPSX_PROFILER_ENABLED 0
+#ifndef QPSX_PROFILER_ENABLED
+#define QPSX_PROFILER_ENABLED 1
+#endif
 
 #include <stdint.h>
 

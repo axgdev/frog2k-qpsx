@@ -21,6 +21,78 @@ endif
 QPSX_PLATFORM_UNIFROG := $(if $(filter unifrog,$(QPSX_PLATFORM)),1,0)
 QPSX_PLATFORM_LINUX := $(if $(filter linux,$(QPSX_PLATFORM)),1,0)
 QPSX_ENABLE_MIPS32R2 ?= 0
+# Keep optimization selectable for the NOMMU target.  The HC15xx has only a
+# 16 KiB, 2-way I-cache; size-oriented builds can beat -O2 when the complete
+# GPU/recompiler text no longer fits in the hot instruction working set.
+QPSX_OPTIMIZE ?= -O2
+# Optional size optimization for the renderer translation units only.  Keep
+# this empty by default: the recompiler, GTE, memory and audio code are much
+# more sensitive to -O2 scheduling than the large generated GPU driver.
+QPSX_GPU_OPTIMIZE ?=
+# The SPU mixer is a large, frequently entered routine on the single-core
+# target.  Keep this separate from the renderer knob so a size-vs-schedule
+# A/B can be measured without changing GPU code or audio behavior.  Empty is
+# the established optimization level; -Os is an opt-in cache-footprint test.
+QPSX_SPU_OPTIMIZE ?=
+# Bypass the dynamic RAM LUT in the C helper for PS1's 8 MiB mirrored window.
+# Leave this an explicit A/B knob because the extra range check also enlarges
+# the helper text in the tiny target I-cache.
+QPSX_LINUX_RAM_HELPER_FASTPATH ?= 0
+QPSX_MIPS_ASM_MEM_READS ?= 0
+QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY ?= 0
+QPSX_HLE_LAZY_EVENT_CHECK ?= 0
+QPSX_GPU_GOURAUD_LINE_FLATFAST ?= 0
+QPSX_GPU_POLY_2043_FAST ?= 0
+# Fuse ordinary linked-list GPU command-buffer bookkeeping when it is safe to
+# defer status/dirty publication until the chain boundary.  The default keeps
+# the established per-node path byte-for-byte in the generated code.
+QPSX_GPU_DMA_CHAIN_FAST ?= 0
+# Minimum prior-chain GPU-DMA work before the out-of-line deferred-chain
+# walker is entered. Work is the existing GPU_dmaChain cpu_cycles estimate;
+# zero keeps the historical walker byte-for-byte gated off.
+QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK ?= 0
+# Defer the adaptive walker's redundant first-node prefetch to its caller.
+# GPU_dmaChain already issued the same hint before entering the predictor gate.
+# Keep this disabled by default so the established control remains unchanged.
+QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH ?= 0
+QPSX_GE_RAW_VRAM ?= 0
+QPSX_GPU_RECIP_TABLE_BITS ?= 0
+QPSX_GPU_4BPP_FULLMASK ?= 0
+QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS ?= 16
+QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES ?= 0
+QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL ?= 0
+QPSX_GPU_4BPP_GOURAUD_CACHE ?= 0
+QPSX_GPU_DIRECT_PACKET ?= 0
+# Keep the small, repeatedly entered dispatch/raster/audio entry points in
+# GCC's .text.hot subsection.  This is an I-cache layout candidate only: all
+# algorithms and compatibility fallbacks are unchanged when it is disabled.
+QPSX_HOT_LAYOUT ?= 0
+# Optional 300-frame phase counters for physical-device attribution.  The
+# default is a compile-time no-op; diagnostic cores opt in explicitly because
+# per-command counters necessarily add work to the measured CPU path.
+QPSX_PHASE_METRICS ?= 0
+# Optional per-GTE-command histogram for workload attribution.  This is
+# compile-time off in every normal/core-speed build; diagnostic targets opt in
+# and report once at shutdown, so no cycle reads or logging enter the hot path.
+QPSX_GTE_OPCODE_COUNTER ?= 0
+# Compile only the scalar INTPL helper with a stronger optimizer.  This is an
+# attributable experiment; normal builds leave it disabled.
+QPSX_GTE_INTPL_OPTIMIZE ?= 0
+QPSX_GTE_INTPL_COMPACT ?= 0
+QPSX_GTE_RTPT_OS ?= 0
+# Hand-written leaf RTPT kernel for a dedicated MIPS32 physical A/B.  It is
+# opt-in; normal builds retain the exact C implementation.
+QPSX_GTE_RTPT_ASM_FAST ?= 0
+# Emit one architecturally harmless, uniquely encoded MIPS no-op per
+# retro_run.  QEMU's cache oracle recognizes it as an exact frame boundary;
+# the physical target pays one instruction per frame and tests the identical
+# executable layout that QEMU measured.
+QPSX_PERFORMANCE_FRAME_MARKERS ?= 0
+# The frontend supplies a short hash of every QPSX tuning/build flag. Keep a
+# direct Makefile build attributable too; "untracked" is intentionally visible
+# rather than silently reusing a previous experiment's identity.
+QPSX_BUILD_TAG ?= untagged
+QPSX_BUILD_FINGERPRINT ?= untracked
 
 QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_PLATFORM_UNIFROG=$(QPSX_PLATFORM_UNIFROG) \
@@ -28,6 +100,33 @@ QPSX_PLATFORM_CFLAGS := \
 	-DQPSX_ENABLE_MIPS_DIRECT_MEM=1 \
 	-DQPSX_ENABLE_MIPS_LSU_CACHING=1 \
 	-DQPSX_ENABLE_MIPS_CONST_MEM=1 \
+	-DQPSX_LINUX_RAM_HELPER_FASTPATH=$(QPSX_LINUX_RAM_HELPER_FASTPATH) \
+	-DQPSX_MIPS_ASM_MEM_READS=$(QPSX_MIPS_ASM_MEM_READS) \
+	-DQPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY=$(QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY) \
+	-DQPSX_HLE_LAZY_EVENT_CHECK=$(QPSX_HLE_LAZY_EVENT_CHECK) \
+	-DQPSX_GPU_GOURAUD_LINE_FLATFAST=$(QPSX_GPU_GOURAUD_LINE_FLATFAST) \
+	-DQPSX_GPU_POLY_2043_FAST=$(QPSX_GPU_POLY_2043_FAST) \
+	-DQPSX_GPU_DMA_CHAIN_FAST=$(QPSX_GPU_DMA_CHAIN_FAST) \
+	-DQPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK) \
+	-DQPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH) \
+	-DQPSX_GE_RAW_VRAM=$(QPSX_GE_RAW_VRAM) \
+	-DQPSX_GPU_RECIP_TABLE_BITS=$(QPSX_GPU_RECIP_TABLE_BITS) \
+	-DQPSX_GPU_4BPP_FULLMASK=$(QPSX_GPU_4BPP_FULLMASK) \
+	-DQPSX_GPU_4BPP_FULLMASK_MIN_PIXELS=$(QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS) \
+	-DQPSX_GPU_4BPP_FULLMASK_PACKED_WRITES=$(QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES) \
+	-DQPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL=$(QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL) \
+	-DQPSX_GPU_4BPP_GOURAUD_CACHE=$(QPSX_GPU_4BPP_GOURAUD_CACHE) \
+	-DQPSX_GPU_DIRECT_PACKET=$(QPSX_GPU_DIRECT_PACKET) \
+	-DQPSX_HOT_LAYOUT=$(QPSX_HOT_LAYOUT) \
+	-DQPSX_PHASE_METRICS=$(QPSX_PHASE_METRICS) \
+	-DQPSX_GTE_OPCODE_COUNTER=$(QPSX_GTE_OPCODE_COUNTER) \
+	-DQPSX_GTE_INTPL_OPTIMIZE=$(QPSX_GTE_INTPL_OPTIMIZE) \
+	-DQPSX_GTE_INTPL_COMPACT=$(QPSX_GTE_INTPL_COMPACT) \
+	-DQPSX_GTE_RTPT_OS=$(QPSX_GTE_RTPT_OS) \
+	-DQPSX_GTE_RTPT_ASM_FAST=$(QPSX_GTE_RTPT_ASM_FAST) \
+	-DQPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS) \
+	-DQPSX_BUILD_TAG=\"$(QPSX_BUILD_TAG)\" \
+	-DQPSX_BUILD_FINGERPRINT=\"$(QPSX_BUILD_FINGERPRINT)\" \
 	-DQPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)
 ifeq ($(QPSX_PLATFORM),linux)
 QPSX_PLATFORM_CFLAGS += \
@@ -67,6 +166,10 @@ endif
 
 all: $(TARGET)
 
+# The branch-selection audit is source-only and must remain runnable from the
+# host check even when a caller's CXX names the MIPS cross compiler.
+QPSX_AUDIT_CXX ?= c++
+
 # Port selection - libretro (not SDL!)
 PORT = libretro
 
@@ -83,7 +186,7 @@ MORE_CFLAGS = -Os -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
 	-D$(shell echo $(GPU) | tr a-z A-Z) \
 	-D$(shell echo $(SPU) | tr a-z A-Z)
 else
-MORE_CFLAGS = -g -O2 -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
+MORE_CFLAGS = $(QPSX_OPTIMIZE) -Isrc/ -Isrc/spu/$(SPU) -Isrc/gpu/$(GPU) \
 	-Isrc/plugin_lib \
 	-Isrc/port/$(PORT) \
 	-Ilibretro/core -Ilibretro/include \
@@ -132,12 +235,47 @@ qpsx-config-force:
 $(QPSX_CONFIG_STAMP): qpsx-config-force
 	@set -eu; tmp='$@.tmp'; \
 	{ printf '%s\n' \
+		'platform=$(platform)' \
 		'QPSX_PLATFORM=$(QPSX_PLATFORM)' \
 		'QPSX_ENABLE_MIPS32R2=$(QPSX_ENABLE_MIPS32R2)' \
-		'CC=$(CC)' 'CXX=$(CXX)' 'AR=$(AR)'; \
+		'QPSX_OPTIMIZE=$(QPSX_OPTIMIZE)' \
+		'QPSX_GPU_OPTIMIZE=$(QPSX_GPU_OPTIMIZE)' \
+		'QPSX_SPU_OPTIMIZE=$(QPSX_SPU_OPTIMIZE)' \
+		'QPSX_LINUX_RAM_HELPER_FASTPATH=$(QPSX_LINUX_RAM_HELPER_FASTPATH)' \
+		'QPSX_MIPS_ASM_MEM_READS=$(QPSX_MIPS_ASM_MEM_READS)' \
+		'QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY=$(QPSX_MIPS_SCRATCHPAD_ARITH_CLASSIFY)' \
+		'QPSX_HLE_LAZY_EVENT_CHECK=$(QPSX_HLE_LAZY_EVENT_CHECK)' \
+		'QPSX_GPU_GOURAUD_LINE_FLATFAST=$(QPSX_GPU_GOURAUD_LINE_FLATFAST)' \
+		'QPSX_GPU_POLY_2043_FAST=$(QPSX_GPU_POLY_2043_FAST)' \
+		'QPSX_GPU_DMA_CHAIN_FAST=$(QPSX_GPU_DMA_CHAIN_FAST)' \
+		'QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK)' \
+		'QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH=$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH)' \
+		'QPSX_GE_RAW_VRAM=$(QPSX_GE_RAW_VRAM)' \
+		'QPSX_GPU_RECIP_TABLE_BITS=$(QPSX_GPU_RECIP_TABLE_BITS)' \
+		'QPSX_GPU_4BPP_FULLMASK=$(QPSX_GPU_4BPP_FULLMASK)' \
+		'QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS=$(QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS)' \
+		'QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES=$(QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES)' \
+		'QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL=$(QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL)' \
+		'QPSX_GPU_4BPP_GOURAUD_CACHE=$(QPSX_GPU_4BPP_GOURAUD_CACHE)' \
+		'QPSX_GPU_DIRECT_PACKET=$(QPSX_GPU_DIRECT_PACKET)' \
+		'QPSX_HOT_LAYOUT=$(QPSX_HOT_LAYOUT)' \
+		'QPSX_PHASE_METRICS=$(QPSX_PHASE_METRICS)' \
+		'QPSX_GTE_OPCODE_COUNTER=$(QPSX_GTE_OPCODE_COUNTER)' \
+		'QPSX_GTE_INTPL_OPTIMIZE=$(QPSX_GTE_INTPL_OPTIMIZE)' \
+		'QPSX_GTE_INTPL_COMPACT=$(QPSX_GTE_INTPL_COMPACT)' \
+		'QPSX_GTE_RTPT_OS=$(QPSX_GTE_RTPT_OS)' \
+		'QPSX_GTE_RTPT_ASM_FAST=$(QPSX_GTE_RTPT_ASM_FAST)' \
+		'QPSX_PERFORMANCE_FRAME_MARKERS=$(QPSX_PERFORMANCE_FRAME_MARKERS)' \
+		'QPSX_BUILD_TAG=$(QPSX_BUILD_TAG)' \
+		'QPSX_BUILD_FINGERPRINT=$(QPSX_BUILD_FINGERPRINT)' \
+		'GPU=$(GPU)' 'SPU=$(SPU)' 'RECOMPILER=$(RECOMPILER)' \
+		'STATIC_LINKING=$(STATIC_LINKING)' 'TARGET=$(TARGET)' \
+		'CC=$(CC)' 'CXX=$(CXX)' 'AR=$(AR)' \
+		'CPPFLAGS=$(CPPFLAGS)' 'CFLAGS=$(CFLAGS)' 'CXXFLAGS=$(CXXFLAGS)' \
+		'LDFLAGS=$(LDFLAGS)'; \
 	} > "$$tmp"; \
 	if ! cmp -s "$$tmp" '$@' 2>/dev/null; then \
-		rm -f $(OBJS) '$(TARGET)'; \
+		rm -f $(OBJS) $(DEPFILES) '$(TARGET)'; \
 		mv "$$tmp" '$@'; \
 	else \
 		rm -f "$$tmp"; \
@@ -180,15 +318,43 @@ OBJS += \
 	src/gpu/gpulib/gpu.o \
 	src/gpu/gpulib/vout_port.o
 
-# QPSX v091: MIPS32 Assembly optimizations (SF2000 only)
+# The Unai renderer is a very large template-instantiated translation unit.
+# Keep the object list explicit so the optional flag cannot leak into the
+# recompiler, GTE, memory, or audio translation units.
+QPSX_GPU_OBJECTS := src/gpu/$(GPU)/gpulib_if.o src/gpu/gpulib/gpu.o
+# gpu_inner.h includes the compact CF=2043 template directly.  Keep the
+# otherwise intentionally lightweight make graph aware of that header so an
+# incremental A/B rebuild cannot reuse a stale renderer object.
+src/gpu/$(GPU)/gpulib_if.o: src/gpu/$(GPU)/gpu_poly2043_fast.h
+ifeq ($(QPSX_GPU_DMA_CHAIN_FAST),1)
+OBJS += src/gpu/gpulib/gpu_dma_chain_finish.o
+src/gpu/gpulib/gpu_dma_chain_finish.o: src/gpu/gpulib/gpu_dma_chain_fast.h
+endif
+ifneq ($(filter-out 0,$(QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK)),)
+OBJS += src/gpu/gpulib/gpu_dma_chain_adaptive.o
+src/gpu/gpulib/gpu_dma_chain_adaptive.o: \
+	src/gpu/gpulib/gpu_dma_chain_adaptive.h \
+	src/gpu/gpulib/gpu.h
+endif
+
+# QPSX v091: MIPS32 Assembly optimizations (SF2000 bare-metal only)
 # QPSX v099: Added psxmem_asm.o for memory write optimization
 ifeq ($(platform), sf2000)
 OBJS += \
 	src/gte_asm.o \
 	src/psxmem_asm.o
+else ifeq ($(QPSX_MIPS_ASM_MEM_READS), 1)
+OBJS += src/psxmem_asm.o
+endif
+ifeq ($(QPSX_GTE_RTPT_ASM_FAST), 1)
+OBJS += src/gte_rtpt_asm.o
+endif
+# HC15xx-safe MIPS32r2 GPU inner loops (EXT/INS/MOVZ/PREF only, see
+# gpu_inner_mips32.h): built for every MIPS frontend that licenses the safe
+# subset.  These ops are confirmed working on the physical HC15xx while the
+# buggy r2 encodings (ROTR/SEB/SEH/WSBH/SYNCI/JR.HB) are never emitted.
 ifeq ($(QPSX_ENABLE_MIPS32R2), 1)
 OBJS += src/gpu/$(GPU)/gpu_inner_mips32.o
-endif
 endif
 
 # SPU - pcsxrearmed with libretro audio backend
@@ -207,6 +373,9 @@ OBJS += \
 	src/spu/$(SPU)/cdda_mix_asm.o
 endif
 
+OBJS += \
+	src/qpsx_phase_metrics.o
+
 # Plugin lib
 OBJS += \
 	src/plugin_lib/plugin_lib.o \
@@ -223,6 +392,13 @@ OBJS += \
 
 $(OBJS): $(QPSX_CONFIG_STAMP)
 
+# Compiler-generated dependencies keep header changes and generated-config
+# changes from silently reusing stale source objects.  DEPFILES is defined
+# after the complete conditional object list above.
+DEPFILES := $(OBJS:.o=.d)
+
+-include $(DEPFILES)
+
 $(TARGET): $(OBJS)
 ifeq ($(STATIC_LINKING), 1)
 	$(AR) rcs $@ $(OBJS)
@@ -231,17 +407,45 @@ else
 endif
 
 clean:
-	$(RM) $(TARGET) $(OBJS) $(QPSX_CONFIG_STAMP)
+	$(RM) $(TARGET) $(OBJS) $(DEPFILES) $(QPSX_CONFIG_STAMP)
+
+.PHONY: asm-read-audit
+asm-read-audit:
+	@set -eu; tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	sed -n '/const uptr mem_read_func\[\]/,/^\t\t};/p' \
+		src/recompiler/mips/rec_lsu.cpp.h > "$$tmp/fragment.cpp"; \
+	$(QPSX_AUDIT_CXX) -E -P -x c++ -UQPSX_MIPS_ASM_MEM_READS \
+		-DQPSX_MIPS_ASM_MEM_READS=1 "$$tmp/fragment.cpp" -o "$$tmp/asm.i"; \
+	$(QPSX_AUDIT_CXX) -E -P -x c++ -UQPSX_MIPS_ASM_MEM_READS \
+		-DQPSX_MIPS_ASM_MEM_READS=0 "$$tmp/fragment.cpp" -o "$$tmp/control.i"; \
+	asm_block=$$(sed -n '/const uptr mem_read_func\[\]/,/};/p' "$$tmp/asm.i"); \
+	control_block=$$(sed -n '/const uptr mem_read_func\[\]/,/};/p' "$$tmp/control.i"); \
+	printf '%s\n' "$$asm_block" | grep -F 'psxMemRead8_asm' >/dev/null; \
+	printf '%s\n' "$$asm_block" | grep -F 'psxMemRead16_asm' >/dev/null; \
+	printf '%s\n' "$$asm_block" | grep -F 'psxMemRead32_asm' >/dev/null; \
+	printf '%s\n' "$$control_block" | grep -F 'psxMemRead8,' >/dev/null; \
+	printf '%s\n' "$$control_block" | grep -F 'psxMemRead16,' >/dev/null; \
+	printf '%s\n' "$$control_block" | grep -F 'psxMemRead32' >/dev/null; \
+	if printf '%s\n' "$$control_block" | grep -F '_asm' >/dev/null; then \
+		echo 'asm-read-audit: control branch selected ASM helper' >&2; exit 1; \
+	fi; \
+	if printf '%s\n' "$$asm_block" | grep -E 'psxMemRead(8|16|32),[[:space:]]' >/dev/null; then \
+		echo 'asm-read-audit: ASM branch selected C helper' >&2; exit 1; \
+	fi; \
+	echo 'asm-read-audit: ASM and control generated branches select the expected helpers'
 
 # Compilation rules
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(if $(filter src/spu/$(SPU)/spu.o,$@),$(QPSX_SPU_OPTIMIZE),) \
+		-MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
 
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(if $(filter $@,$(QPSX_GPU_OBJECTS)),$(QPSX_GPU_OPTIMIZE),) \
+		-MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
 
 %.o: %.S
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
 
 %.o: %.s
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@

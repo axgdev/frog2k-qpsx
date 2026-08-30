@@ -35,12 +35,239 @@
 
 extern "C" void xlog(const char *fmt, ...);
 
+/* These defaults keep the generic QPSX tree buildable outside the SF2000
+ * frontend.  The frontend overrides them in its production flag set and the
+ * resulting values are printed once so a physical-device log identifies the
+ * exact A/B candidate that produced it. */
+#ifndef QPSX_MIPS_DISPATCH_CACHE_ENTRIES
+#define QPSX_MIPS_DISPATCH_CACHE_ENTRIES 64
+#endif
+#ifndef QPSX_GTE_NATIVE_DIVIDE
+#define QPSX_GTE_NATIVE_DIVIDE 0
+#endif
+#ifndef QPSX_GTE_HOT_O3
+#define QPSX_GTE_HOT_O3 0
+#endif
+#ifndef QPSX_GTE_OPCODE_COUNTER
+#define QPSX_GTE_OPCODE_COUNTER 0
+#endif
+#ifndef QPSX_MIPS_PSMEM_REG
+#define QPSX_MIPS_PSMEM_REG 0
+#endif
+#ifndef QPSX_MIPS_PERSISTENT_RETURN_RA
+#define QPSX_MIPS_PERSISTENT_RETURN_RA 0
+#endif
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS 0
+#endif
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX 0
+#endif
+#ifndef QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES
+#define QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES 0
+#endif
+#ifndef QPSX_PROFILER_ENABLED
+#define QPSX_PROFILER_ENABLED 0
+#endif
+#ifndef QPSX_RUNTIME_TELEMETRY
+#define QPSX_RUNTIME_TELEMETRY 0
+#endif
+#ifndef QPSX_GPU_FIXED_FAST_PATH
+#define QPSX_GPU_FIXED_FAST_PATH 0
+#endif
+#ifndef QPSX_GPU_FIXED_LIGHTING
+#define QPSX_GPU_FIXED_LIGHTING QPSX_GPU_FIXED_FAST_PATH
+#endif
+#ifndef QPSX_GPU_RUNTIME_METRICS
+#define QPSX_GPU_RUNTIME_METRICS 0
+#endif
+#ifndef QPSX_GPU_RECIP_TABLE_BITS
+#define QPSX_GPU_RECIP_TABLE_BITS 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK
+#define QPSX_GPU_4BPP_FULLMASK 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS
+#define QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES
+#define QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES 0
+#endif
+#ifndef QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL
+#define QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL 0
+#endif
+#ifndef QPSX_PERFORMANCE_FRAME_MARKERS
+#define QPSX_PERFORMANCE_FRAME_MARKERS 0
+#endif
+#ifndef QPSX_PHASE_METRICS
+#define QPSX_PHASE_METRICS 0
+#endif
+#ifndef QPSX_GPU_DIRECT_PACKET
+#define QPSX_GPU_DIRECT_PACKET 0
+#endif
+#if defined(SHMEM_MIRRORING) || defined(TMPFS_MIRRORING)
+#define QPSX_MIPS_VIRTUAL_MIRRORING 1
+#else
+#define QPSX_MIPS_VIRTUAL_MIRRORING 0
+#endif
+#ifndef QPSX_MIPS_FAST_MEM_CONVERT
+#define QPSX_MIPS_FAST_MEM_CONVERT 0
+#endif
+#ifndef QPSX_MIPS_PROPAGATE_FUZZY_ADDR
+#define QPSX_MIPS_PROPAGATE_FUZZY_ADDR 0
+#endif
+#ifndef QPSX_GPU_LINEAR_4BPP
+#define QPSX_GPU_LINEAR_4BPP 0
+#endif
+#ifndef QPSX_GPU_PACKED_TILE_WRITES
+#define QPSX_GPU_PACKED_TILE_WRITES 0
+#endif
+#ifndef QPSX_GPU_PACKED_SPRITE_4BPP
+#define QPSX_GPU_PACKED_SPRITE_4BPP 0
+#endif
+#ifndef QPSX_GPU_PACKED_POLY_WRITES
+#define QPSX_GPU_PACKED_POLY_WRITES 0
+#endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_FLATV
+#define QPSX_GPU_4BPP_GOURAUD_FLATV 0
+#endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS
+#define QPSX_GPU_4BPP_GOURAUD_FLATV_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_GOURAUD_CACHE
+#define QPSX_GPU_4BPP_GOURAUD_CACHE 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV
+#define QPSX_GPU_4BPP_FLATV 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW
+#define QPSX_GPU_4BPP_FLATV_ROW 0
+#endif
+#ifndef QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS
+#define QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS 16
+#endif
+#ifndef QPSX_GPU_4BPP_PALETTE_LUT
+#define QPSX_GPU_4BPP_PALETTE_LUT 0
+#endif
+#ifndef QPSX_GPU_HOT_DRIVER_ORDER
+#define QPSX_GPU_HOT_DRIVER_ORDER 0
+#endif
+#ifndef QPSX_GPU_POLY_2043_FAST
+#define QPSX_GPU_POLY_2043_FAST 0
+#endif
+#ifndef QPSX_GPU_DMA_CHAIN_FAST
+#define QPSX_GPU_DMA_CHAIN_FAST 0
+#endif
+#ifndef QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK 0
+#endif
+#ifndef QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH
+#define QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH 0
+#endif
+#ifndef QPSX_HOT_LAYOUT
+#define QPSX_HOT_LAYOUT 0
+#endif
+#ifndef QPSX_MIPS_DISPATCH_CACHE_GP
+#define QPSX_MIPS_DISPATCH_CACHE_GP 0
+#endif
+#ifndef QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI
+#define QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI 0
+#endif
+#ifndef QPSX_MIPS_DISPATCH_BRANCH_LIKELY
+#define QPSX_MIPS_DISPATCH_BRANCH_LIKELY 0
+#endif
+#ifndef QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY
+#define QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY 0
+#endif
+#ifndef QPSX_BUILD_TAG
+#define QPSX_BUILD_TAG "untagged"
+#endif
+#ifndef QPSX_BUILD_FINGERPRINT
+#define QPSX_BUILD_FINGERPRINT "untracked"
+#endif
+#ifndef QPSX_GE_RAW_VRAM
+#define QPSX_GE_RAW_VRAM 0
+#endif
+#ifndef QPSX_MIPS_ASM_MEM_READS
+#define QPSX_MIPS_ASM_MEM_READS 0
+#endif
+#ifndef QPSX_LINUX_RAM_HELPER_FASTPATH
+#define QPSX_LINUX_RAM_HELPER_FASTPATH 0
+#endif
+#ifndef QPSX_HLE_LAZY_EVENT_CHECK
+#define QPSX_HLE_LAZY_EVENT_CHECK 0
+#endif
+#ifndef QPSX_GPU_GOURAUD_LINE_FLATFAST
+#define QPSX_GPU_GOURAUD_LINE_FLATFAST 0
+#endif
+
+#ifdef PSXREC
+extern "C" void recLogTelemetry(void);
+extern u32 *recMem;
+#endif
+
 PcsxConfig Config;
 R3000Acpu *psxCpu=NULL;
 psxRegisters psxRegs;
 
 int psxInit() {
 	printf("Running PCSX Version %s (%s).\n", PACKAGE_VERSION, __DATE__);
+	/* Keep each fingerprint record below qpsx_adapter's 320-byte kmsg
+	 * buffer. Losing the complete line makes physical A/B logs ambiguous,
+	 * especially when a long build tag is used. */
+	xlog("QPSX: build_id=%s config=%s dispatch_cache=%d dispatch_gp=%d dispatch_gp_abi=%d "
+	     "dispatch_bl=%d dispatch_frame_bl=%d psxM_reg=%d gte_native_div=%d "
+	     "gte_hot_o3=%d return_ra=%d",
+	     QPSX_BUILD_TAG, QPSX_BUILD_FINGERPRINT,
+	     QPSX_MIPS_DISPATCH_CACHE_ENTRIES, QPSX_MIPS_DISPATCH_CACHE_GP,
+	     QPSX_MIPS_DISPATCH_CACHE_GP_TRUST_ABI,
+	     QPSX_MIPS_DISPATCH_BRANCH_LIKELY,
+	     QPSX_MIPS_DISPATCH_FRAME_BRANCH_LIKELY,
+	     QPSX_MIPS_PSMEM_REG,
+	     QPSX_GTE_NATIVE_DIVIDE, QPSX_GTE_HOT_O3,
+	     QPSX_MIPS_PERSISTENT_RETURN_RA);
+	xlog("QPSX: fold=%d/%d/%d profiler=%d telemetry=%d raw_vram=%d gpu_fixed=%d "
+	     "gpu_light_fast=%d gpu_linear4=%d gpu_tile32=%d gpu_sprite4=%d "
+	     "gpu_poly32=%d gpu_gflatv=%d gpu_gcache=%d gpu_fullmask=%d gpu_pack4=%d gpu_pack4u=%d gpu_hot_order=%d gpu_metrics=%d gpu_recip=%d "
+	     "mirror=%d fast_mem=%d",
+	     QPSX_MIPS_FOLD_DIRECT_JUMPS,
+	     QPSX_MIPS_FOLD_DIRECT_JUMPS_MAX, QPSX_MIPS_FOLD_DIRECT_JUMPS_BYTES,
+	     QPSX_PROFILER_ENABLED, QPSX_RUNTIME_TELEMETRY, QPSX_GE_RAW_VRAM,
+	     QPSX_GPU_FIXED_FAST_PATH, QPSX_GPU_FIXED_LIGHTING,
+	     QPSX_GPU_LINEAR_4BPP,
+	     QPSX_GPU_PACKED_TILE_WRITES, QPSX_GPU_PACKED_SPRITE_4BPP,
+	     QPSX_GPU_PACKED_POLY_WRITES,
+	     QPSX_GPU_4BPP_GOURAUD_FLATV, QPSX_GPU_4BPP_GOURAUD_CACHE,
+	     QPSX_GPU_4BPP_FULLMASK,
+	     QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES,
+	     QPSX_GPU_4BPP_FULLMASK_PACKED_UNROLL,
+	     QPSX_GPU_HOT_DRIVER_ORDER,
+	     QPSX_GPU_RUNTIME_METRICS, QPSX_GPU_RECIP_TABLE_BITS,
+	     QPSX_MIPS_VIRTUAL_MIRRORING,
+	     QPSX_MIPS_FAST_MEM_CONVERT);
+	xlog("QPSX: mips_opts fuzzy_addiu=%d",
+	     QPSX_MIPS_PROPAGATE_FUZZY_ADDR);
+	xlog("QPSX: mem_opts ram_helper=%d asm_reads=%d hle_lazy=%d frame_markers=%d direct_packet=%d",
+	     QPSX_LINUX_RAM_HELPER_FASTPATH, QPSX_MIPS_ASM_MEM_READS,
+	     QPSX_HLE_LAZY_EVENT_CHECK, QPSX_PERFORMANCE_FRAME_MARKERS,
+	     QPSX_GPU_DIRECT_PACKET);
+	xlog("QPSX: gpu_line_opts gouraud_flatfast=%d poly2043_fast=%d",
+	     QPSX_GPU_GOURAUD_LINE_FLATFAST, QPSX_GPU_POLY_2043_FAST);
+	xlog("QPSX: gpu_dma_opts chain_fast=%d adaptive_min_prev_work=%d adaptive_defer_prefetch=%d",
+	     QPSX_GPU_DMA_CHAIN_FAST,
+	     QPSX_GPU_DMA_CHAIN_ADAPTIVE_MIN_PREV_WORK,
+	     QPSX_GPU_DMA_CHAIN_ADAPTIVE_DEFER_PREFETCH);
+	xlog("QPSX: gpu_flatv=%d min_pixels=%d gpu_flatv_row=%d row_min=%d palette_lut=%d gcache=%d fullmask=%d fullmask_min=%d pack4=%d hot_layout=%d phase_metrics=%d",
+	     QPSX_GPU_4BPP_FLATV, QPSX_GPU_4BPP_FLATV_MIN_PIXELS,
+	     QPSX_GPU_4BPP_FLATV_ROW, QPSX_GPU_4BPP_FLATV_ROW_MIN_PIXELS,
+	     QPSX_GPU_4BPP_PALETTE_LUT, QPSX_GPU_4BPP_GOURAUD_CACHE,
+	     QPSX_GPU_4BPP_FULLMASK,
+	     QPSX_GPU_4BPP_FULLMASK_MIN_PIXELS,
+	     QPSX_GPU_4BPP_FULLMASK_PACKED_WRITES,
+	     QPSX_HOT_LAYOUT, QPSX_PHASE_METRICS);
 
 #ifdef PSXREC
 	#ifndef interpreter_none
@@ -57,12 +284,21 @@ int psxInit() {
 	//  memory mappings it needs for psxM,psxH etc.
 	if (psxCpu->Init() < 0)
 		return -1;
+	#ifdef PSXREC
+	/* The generated-code window is process-relative on Linux NOMMU.  Record
+	 * its actual address so the QEMU cache model never mistakes a kernel text
+	 * range for recRAM when ASLR/loader placement changes. */
+	xlog("QPSX: rec address recMem=%08x", (unsigned)(uptr)recMem);
+	#endif
 	return psxMemInit();
 }
 
 void psxReset() {
 	xlog("QPSX: >>> psxReset() START <<<\n");
 	xlog("QPSX: Config.HLE=%d\n", Config.HLE);
+	#if QPSX_GTE_OPCODE_COUNTER
+	qpsx_gte_opcode_counter_reset();
+	#endif
 
 	psxCpu->Reset();
 	xlog("QPSX: psxCpu->Reset() done\n");
@@ -108,6 +344,16 @@ void psxReset() {
 void psxShutdown() {
 	// Shutdown CPU *before* calling psxMemShutdown(), to allow it to unmap
 	//  psxM,psxH etc, if it has done so.
+	#if QPSX_GTE_OPCODE_COUNTER
+	qpsx_gte_opcode_counter_report();
+	#endif
+#ifdef PSXREC
+	/* This is intentionally once per emulator lifetime: counters are updated
+	 * only when a block is compiled, so this log has no steady-state cost. */
+	#if QPSX_RUNTIME_TELEMETRY
+	recLogTelemetry();
+	#endif
+#endif
 	psxCpu->Shutdown();
 
 	psxMemShutdown();
